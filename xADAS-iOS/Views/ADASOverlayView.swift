@@ -10,7 +10,7 @@ struct ADASOverlayView: View {
     let frameWidth: Int
     let frameHeight: Int
     let detections: [VehicleDetection]
-    let leadDistanceMeters: Double?
+    let leadDistanceState: LeadDistanceState
     let horizonRatio: Double
     let laneDetection: LaneDetection?
     let laneStatus: String
@@ -41,7 +41,7 @@ struct ADASOverlayView: View {
                         Spacer()
 
                         VStack(alignment: .trailing, spacing: 4) {
-                            Text("V0.5")
+                            Text("V0.6")
                                 .font(.caption.monospaced().bold())
                             Text(String(format: "FPS %.1f", fps))
                                 .font(.caption2.monospaced())
@@ -57,13 +57,22 @@ struct ADASOverlayView: View {
                     .padding(.horizontal, 20)
                     .padding(.top, 12)
 
-                    if let leadDistanceMeters {
-                        Text(String(format: "%.1f m", leadDistanceMeters))
-                            .font(.system(size: 34, weight: .bold, design: .rounded))
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 5)
-                            .background(.black.opacity(0.42), in: RoundedRectangle(cornerRadius: 10))
-                            .padding(.top, 8)
+                    if let distance = leadDistanceState.distanceMeters {
+                        VStack(spacing: 3) {
+                            Text(String(format: "%.1f m", distance))
+                                .font(.system(size: 36, weight: .bold, design: .rounded))
+                            Text(leadDistanceState.risk.displayText)
+                                .font(.caption.monospaced().bold())
+                            if let closing = leadDistanceState.closingSpeedMetersPerSecond {
+                                Text(String(format: closing >= 0 ? "CLOSING %.1f m/s" : "OPENING %.1f m/s", abs(closing)))
+                                    .font(.caption2.monospaced())
+                            }
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 7)
+                        .background(distanceColor.opacity(0.80), in: RoundedRectangle(cornerRadius: 12))
+                        .padding(.top, 8)
                     }
 
                     if let warning = laneDepartureState.displayText {
@@ -94,10 +103,19 @@ struct ADASOverlayView: View {
         .allowsHitTesting(false)
     }
 
+    private var distanceColor: Color {
+        switch leadDistanceState.risk {
+        case .safe: return .green
+        case .caution: return .orange
+        case .danger: return .red
+        case .unavailable: return .gray
+        }
+    }
+
     @ViewBuilder
     private func detectionBox(_ detection: VehicleDetection, in size: CGSize) -> some View {
         let rect = displayRect(for: detection.boundingBox, in: size)
-        let color: Color = detection.isLead ? .yellow : .green
+        let color: Color = detection.isLead ? distanceColor : .green
 
         ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: 5)
