@@ -12,6 +12,9 @@ struct ADASOverlayView: View {
     let detections: [VehicleDetection]
     let leadDistanceMeters: Double?
     let horizonRatio: Double
+    let laneDetection: LaneDetection?
+    let laneStatus: String
+    let laneDepartureState: LaneDepartureState
 
     var body: some View {
         GeometryReader { proxy in
@@ -30,12 +33,15 @@ struct ADASOverlayView: View {
                             Text(detectorStatus)
                                 .font(.caption2.monospaced())
                                 .foregroundStyle(.white.opacity(0.8))
+                            Text(laneStatus)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(laneDetection == nil ? .yellow : .cyan)
                         }
 
                         Spacer()
 
                         VStack(alignment: .trailing, spacing: 4) {
-                            Text("V0.4")
+                            Text("V0.5")
                                 .font(.caption.monospaced().bold())
                             Text(String(format: "FPS %.1f", fps))
                                 .font(.caption2.monospaced())
@@ -60,10 +66,24 @@ struct ADASOverlayView: View {
                             .padding(.top, 8)
                     }
 
+                    if let warning = laneDepartureState.displayText {
+                        Text("⚠︎ \(warning)")
+                            .font(.headline.monospaced().bold())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(.red.opacity(0.85), in: RoundedRectangle(cornerRadius: 10))
+                            .padding(.top, 8)
+                    }
+
                     Spacer()
                 }
 
-                roadGuide(in: proxy.size)
+                if let laneDetection {
+                    laneOverlay(laneDetection, in: proxy.size)
+                } else {
+                    roadGuide(in: proxy.size)
+                }
 
                 ForEach(detections) { detection in
                     detectionBox(detection, in: proxy.size)
@@ -115,6 +135,28 @@ struct ADASOverlayView: View {
         )
     }
 
+    private func laneOverlay(_ lane: LaneDetection, in size: CGSize) -> some View {
+        Canvas { context, canvasSize in
+            var left = Path()
+            var right = Path()
+
+            for (index, point) in lane.leftPoints.enumerated() {
+                let p = CGPoint(x: point.x * canvasSize.width, y: point.y * canvasSize.height)
+                if index == 0 { left.move(to: p) } else { left.addLine(to: p) }
+            }
+
+            for (index, point) in lane.rightPoints.enumerated() {
+                let p = CGPoint(x: point.x * canvasSize.width, y: point.y * canvasSize.height)
+                if index == 0 { right.move(to: p) } else { right.addLine(to: p) }
+            }
+
+            let warning = laneDepartureState == .warningLeft || laneDepartureState == .warningRight
+            let strokeColor: Color = warning ? .red : .cyan
+            context.stroke(left, with: .color(strokeColor.opacity(0.95)), lineWidth: warning && laneDepartureState == .warningLeft ? 6 : 4)
+            context.stroke(right, with: .color(strokeColor.opacity(0.95)), lineWidth: warning && laneDepartureState == .warningRight ? 6 : 4)
+        }
+    }
+
     private func roadGuide(in size: CGSize) -> some View {
         Canvas { context, canvasSize in
             let centerX = canvasSize.width / 2
@@ -130,8 +172,8 @@ struct ADASOverlayView: View {
             right.move(to: CGPoint(x: centerX + canvasSize.width * 0.05, y: horizonY))
             right.addLine(to: CGPoint(x: centerX + canvasSize.width * 0.25, y: bottomY))
 
-            context.stroke(left, with: .color(.green.opacity(0.8)), lineWidth: 3)
-            context.stroke(right, with: .color(.green.opacity(0.8)), lineWidth: 3)
+            context.stroke(left, with: .color(.green.opacity(0.7)), lineWidth: 2)
+            context.stroke(right, with: .color(.green.opacity(0.7)), lineWidth: 2)
 
             let horizon = Path { path in
                 path.move(to: CGPoint(x: centerX - 45, y: horizonY))
