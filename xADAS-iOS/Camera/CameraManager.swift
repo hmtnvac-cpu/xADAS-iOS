@@ -101,6 +101,8 @@ final class CameraManager: NSObject, ObservableObject {
             throw CameraError.noBackCamera
         }
 
+        frameProcessor.horizontalFieldOfViewDegrees = Double(camera.activeFormat.videoFieldOfView)
+
         let input = try AVCaptureDeviceInput(device: camera)
         guard session.canAddInput(input) else {
             throw CameraError.cannotAddInput
