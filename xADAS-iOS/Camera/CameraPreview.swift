@@ -6,16 +6,14 @@ struct CameraPreview: UIViewRepresentable {
 
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView()
-        view.backgroundColor = .black
         view.videoPreviewLayer.session = session
-        view.videoPreviewLayer.videoGravity = .resizeAspect
+        view.videoPreviewLayer.videoGravity = .resizeAspectFill
         view.applyLandscapeOrientation()
         return view
     }
 
     func updateUIView(_ uiView: PreviewView, context: Context) {
         uiView.videoPreviewLayer.session = session
-        uiView.videoPreviewLayer.videoGravity = .resizeAspect
         uiView.applyLandscapeOrientation()
     }
 }
