@@ -4,8 +4,11 @@ struct ADASOverlayView: View {
     let isCameraRunning: Bool
     let fps: Double
     let pipelineStatus: String
+    let detectorStatus: String
+    let inferenceMS: Double
     let frameWidth: Int
     let frameHeight: Int
+    let detections: [VehicleDetection]
 
     var body: some View {
         GeometryReader { proxy in
@@ -21,14 +24,19 @@ struct ADASOverlayView: View {
                             Text(pipelineStatus)
                                 .font(.caption2.monospaced())
                                 .foregroundStyle(.white.opacity(0.8))
+                            Text(detectorStatus)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.white.opacity(0.8))
                         }
 
                         Spacer()
 
                         VStack(alignment: .trailing, spacing: 4) {
-                            Text("V0.2")
+                            Text("V0.3")
                                 .font(.caption.monospaced().bold())
                             Text(String(format: "FPS %.1f", fps))
+                                .font(.caption2.monospaced())
+                            Text(String(format: "AI %.1f ms", inferenceMS))
                                 .font(.caption2.monospaced())
                             if frameWidth > 0 && frameHeight > 0 {
                                 Text("\(frameWidth)×\(frameHeight)")
@@ -44,10 +52,51 @@ struct ADASOverlayView: View {
                 }
 
                 roadGuide(in: proxy.size)
+
+                ForEach(detections) { detection in
+                    detectionBox(detection, in: proxy.size)
+                }
             }
             .foregroundStyle(.white)
         }
         .allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    private func detectionBox(_ detection: VehicleDetection, in size: CGSize) -> some View {
+        let rect = displayRect(for: detection.boundingBox, in: size)
+        let color: Color = detection.isLead ? .yellow : .green
+
+        ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: 5)
+                .stroke(color, lineWidth: detection.isLead ? 4 : 2)
+
+            Text(labelText(for: detection))
+                .font(.caption2.monospaced().bold())
+                .foregroundStyle(.black)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 3)
+                .background(color)
+                .offset(y: -22)
+        }
+        .frame(width: max(rect.width, 1), height: max(rect.height, 1))
+        .position(x: rect.midX, y: rect.midY)
+    }
+
+    private func labelText(for detection: VehicleDetection) -> String {
+        let confidence = Int(detection.confidence * 100)
+        return detection.isLead
+            ? "LEAD • \(detection.label.uppercased()) \(confidence)%"
+            : "\(detection.label.uppercased()) \(confidence)%"
+    }
+
+    private func displayRect(for normalized: CGRect, in size: CGSize) -> CGRect {
+        CGRect(
+            x: normalized.minX * size.width,
+            y: (1 - normalized.maxY) * size.height,
+            width: normalized.width * size.width,
+            height: normalized.height * size.height
+        )
     }
 
     private func roadGuide(in size: CGSize) -> some View {
