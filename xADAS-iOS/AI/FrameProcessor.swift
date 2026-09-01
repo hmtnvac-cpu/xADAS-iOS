@@ -11,12 +11,16 @@ final class FrameProcessor: ObservableObject {
     @Published private(set) var detections: [VehicleDetection] = []
     @Published private(set) var inferenceMS: Double = 0
     @Published private(set) var detectorStatus = "MODEL NOT LOADED"
+    @Published private(set) var leadDistanceMeters: Double?
+
+    var horizontalFieldOfViewDegrees: Double = 0
 
     private var totalFrames: UInt64 = 0
     private var lastPublishedAt = ProcessInfo.processInfo.systemUptime
     private var inferenceFrameCounter = 0
     private let inferenceStride = 2
     private let detector: VehicleDetector?
+    private let distanceEstimator = DistanceEstimator()
 
     init() {
         do {
@@ -34,14 +38,33 @@ final class FrameProcessor: ObservableObject {
         totalFrames &+= 1
         inferenceFrameCounter &+= 1
 
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+
         var newDetections: [VehicleDetection]?
         var newInferenceMS: Double?
+        var newLeadDistance: Double?
 
         if inferenceFrameCounter >= inferenceStride, let detector {
             inferenceFrameCounter = 0
             do {
                 let result = try detector.detect(pixelBuffer: pixelBuffer)
-                newDetections = result.detections
+                var measured = result.detections
+
+                if let leadIndex = measured.firstIndex(where: { $0.isLead }) {
+                    let distance = distanceEstimator.estimate(
+                        for: measured[leadIndex].boundingBox,
+                        frameWidth: width,
+                        frameHeight: height,
+                        horizontalFieldOfViewDegrees: horizontalFieldOfViewDegrees
+                    )
+                    measured[leadIndex] = measured[leadIndex].withDistance(distance)
+                    newLeadDistance = distance
+                } else {
+                    distanceEstimator.reset()
+                }
+
+                newDetections = measured
                 newInferenceMS = result.inferenceMS
             } catch {
                 let message = error.localizedDescription
@@ -60,8 +83,6 @@ final class FrameProcessor: ObservableObject {
             lastPublishedAt = now
         }
 
-        let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
         let count = totalFrames
 
         DispatchQueue.main.async { [weak self] in
@@ -76,6 +97,7 @@ final class FrameProcessor: ObservableObject {
 
             if let newDetections {
                 self.detections = newDetections
+                self.leadDistanceMeters = newLeadDistance
                 self.detectorStatus = newDetections.isEmpty
                     ? "VEHICLE MODEL ACTIVE • NO VEHICLE"
                     : "VEHICLE MODEL ACTIVE • \(newDetections.count) VEHICLE(S)"
