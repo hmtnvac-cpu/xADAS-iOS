@@ -1,3 +1,4 @@
+import Foundation
 import CoreGraphics
 
 struct VehicleDetection: Identifiable, Equatable {
