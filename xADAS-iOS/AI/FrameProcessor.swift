@@ -1,4 +1,5 @@
 import AVFoundation
+import Combine
 import CoreMedia
 import CoreVideo
 
@@ -8,15 +9,16 @@ final class FrameProcessor: ObservableObject {
     @Published private(set) var frameHeight: Int = 0
     @Published private(set) var pipelineStatus = "FRAME PIPELINE READY"
 
+    private var totalFrames: UInt64 = 0
     private var lastPublishedAt = ProcessInfo.processInfo.systemUptime
 
     func process(sampleBuffer: CMSampleBuffer) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
-        // This is the single entry point for all future vision inference.
-        // V0.3 will call the lead-vehicle model here; later versions can
-        // fan the same frame into lane and SuperCombo runners.
-        processedFrames &+= 1
+        // Single entry point for future inference modules.
+        // V0.3 will attach lead-vehicle detection here. Lane and
+        // SuperCombo runners can consume the same CVPixelBuffer later.
+        totalFrames &+= 1
 
         let now = ProcessInfo.processInfo.systemUptime
         guard now - lastPublishedAt >= 0.25 else { return }
@@ -24,7 +26,7 @@ final class FrameProcessor: ObservableObject {
 
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
-        let count = processedFrames
+        let count = totalFrames
 
         DispatchQueue.main.async { [weak self] in
             self?.frameWidth = width
