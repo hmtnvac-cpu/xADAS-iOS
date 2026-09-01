@@ -5,6 +5,7 @@ struct DriveView: View {
     @StateObject private var camera = CameraManager()
     @State private var showCalibration = false
     @State private var showSettings = false
+    @AppStorage(DistanceEstimator.horizonRatioKey) private var horizonRatio: Double = 0.42
 
     var body: some View {
         ZStack {
@@ -26,7 +27,9 @@ struct DriveView: View {
                 inferenceMS: camera.frameProcessor.inferenceMS,
                 frameWidth: camera.frameProcessor.frameWidth,
                 frameHeight: camera.frameProcessor.frameHeight,
-                detections: camera.frameProcessor.detections
+                detections: camera.frameProcessor.detections,
+                leadDistanceMeters: camera.frameProcessor.leadDistanceMeters,
+                horizonRatio: horizonRatio
             )
 
             if camera.authorizationStatus == .denied || camera.authorizationStatus == .restricted {
