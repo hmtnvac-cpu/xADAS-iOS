@@ -2,6 +2,10 @@ import SwiftUI
 
 struct ADASOverlayView: View {
     let isCameraRunning: Bool
+    let fps: Double
+    let pipelineStatus: String
+    let frameWidth: Int
+    let frameHeight: Int
 
     var body: some View {
         GeometryReader { proxy in
@@ -14,15 +18,23 @@ struct ADASOverlayView: View {
                             Text(isCameraRunning ? "CAMERA ONLINE" : "CAMERA STARTING")
                                 .font(.caption2.monospaced().bold())
                                 .foregroundStyle(isCameraRunning ? .green : .yellow)
+                            Text(pipelineStatus)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.white.opacity(0.8))
                         }
 
                         Spacer()
 
                         VStack(alignment: .trailing, spacing: 4) {
-                            Text("V0.1")
+                            Text("V0.2")
                                 .font(.caption.monospaced().bold())
-                            Text("FPS --")
+                            Text(String(format: "FPS %.1f", fps))
                                 .font(.caption2.monospaced())
+                            if frameWidth > 0 && frameHeight > 0 {
+                                Text("\(frameWidth)×\(frameHeight)")
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.white.opacity(0.75))
+                            }
                         }
                     }
                     .padding(.horizontal, 20)
