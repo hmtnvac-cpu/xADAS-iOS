@@ -1,3 +1,4 @@
+import CoreFoundation
 import CoreML
 import ImageIO
 import Vision
@@ -87,10 +88,9 @@ final class VehicleDetector {
     private func selectLeadIndex(in detections: [VehicleDetection]) -> Int? {
         let candidates = detections.indices.filter { index in
             let box = detections[index].boundingBox
-            let centerX = box.midX
-            let centerDistance = abs(centerX - 0.5)
+            let centerDistance = abs(box.midX - 0.5)
 
-            // Ignore vehicles far outside the forward driving corridor.
+            // Keep the lead candidate inside a broad forward-driving corridor.
             return centerDistance <= 0.28 && box.maxY >= 0.12
         }
 
