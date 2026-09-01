@@ -14,9 +14,10 @@ struct SettingsView: View {
                 }
 
                 Section("Build") {
-                    LabeledContent("Version", value: "0.2")
+                    LabeledContent("Version", value: "0.3")
                     LabeledContent("Frame pipeline", value: "Enabled")
-                    LabeledContent("Lead vehicle model", value: "Not loaded")
+                    LabeledContent("Vehicle detector", value: "Apple YOLOv3Tiny Int8")
+                    LabeledContent("Inference", value: "Core ML + Vision")
                 }
             }
             .navigationTitle("Settings")
