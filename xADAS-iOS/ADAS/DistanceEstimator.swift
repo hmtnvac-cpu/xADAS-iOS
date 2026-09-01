@@ -5,9 +5,6 @@ final class DistanceEstimator {
     static let cameraHeightKey = "xadas.calibration.cameraHeight"
     static let horizonRatioKey = "xadas.calibration.horizonRatio"
 
-    private var smoothedDistance: Double?
-    private let smoothingAlpha = 0.25
-
     init() {
         UserDefaults.standard.register(defaults: [
             Self.cameraHeightKey: 1.25,
@@ -37,15 +34,12 @@ final class DistanceEstimator {
             return nil
         }
 
-        // Vision bounding boxes use a bottom-left origin. Convert the detected
-        // vehicle contact point to the usual image coordinate system (top-left).
+        // Vision bounding boxes use a bottom-left origin. The contact point
+        // with the road is approximated by the bottom edge of the lead box.
         let vehicleBottomRatio = 1.0 - Double(boundingBox.minY)
         let verticalDeltaRatio = vehicleBottomRatio - horizonRatio
 
-        // The vehicle must be below the horizon for a ground-plane intersection.
-        guard verticalDeltaRatio > 0.01 else {
-            return nil
-        }
+        guard verticalDeltaRatio > 0.01 else { return nil }
 
         let aspect = Double(frameWidth) / Double(frameHeight)
         let horizontalFOV = horizontalFieldOfViewDegrees * .pi / 180.0
@@ -57,25 +51,14 @@ final class DistanceEstimator {
 
         let rawDistance = cameraHeight * focalLengthY / deltaPixels
 
-        // Reject values outside the useful range of this monocular prototype.
         guard rawDistance.isFinite,
               rawDistance >= 0.5,
               rawDistance <= 150 else {
             return nil
         }
 
-        let filtered: Double
-        if let previous = smoothedDistance {
-            filtered = previous + smoothingAlpha * (rawDistance - previous)
-        } else {
-            filtered = rawDistance
-        }
-
-        smoothedDistance = filtered
-        return filtered
-    }
-
-    func reset() {
-        smoothedDistance = nil
+        // Keep this estimator geometric only. Temporal filtering and lead
+        // continuity are handled by LeadDistanceTracker.
+        return rawDistance
     }
 }
