@@ -9,6 +9,8 @@ struct ADASOverlayView: View {
     let frameWidth: Int
     let frameHeight: Int
     let detections: [VehicleDetection]
+    let leadDistanceMeters: Double?
+    let horizonRatio: Double
 
     var body: some View {
         GeometryReader { proxy in
@@ -32,7 +34,7 @@ struct ADASOverlayView: View {
                         Spacer()
 
                         VStack(alignment: .trailing, spacing: 4) {
-                            Text("V0.3")
+                            Text("V0.4")
                                 .font(.caption.monospaced().bold())
                             Text(String(format: "FPS %.1f", fps))
                                 .font(.caption2.monospaced())
@@ -47,6 +49,15 @@ struct ADASOverlayView: View {
                     }
                     .padding(.horizontal, 20)
                     .padding(.top, 12)
+
+                    if let leadDistanceMeters {
+                        Text(String(format: "%.1f m", leadDistanceMeters))
+                            .font(.system(size: 34, weight: .bold, design: .rounded))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 5)
+                            .background(.black.opacity(0.42), in: RoundedRectangle(cornerRadius: 10))
+                            .padding(.top, 8)
+                    }
 
                     Spacer()
                 }
@@ -85,9 +96,13 @@ struct ADASOverlayView: View {
 
     private func labelText(for detection: VehicleDetection) -> String {
         let confidence = Int(detection.confidence * 100)
-        return detection.isLead
-            ? "LEAD • \(detection.label.uppercased()) \(confidence)%"
-            : "\(detection.label.uppercased()) \(confidence)%"
+        if detection.isLead {
+            if let distance = detection.distanceMeters {
+                return String(format: "LEAD • %.1f m • %@ %d%%", distance, detection.label.uppercased(), confidence)
+            }
+            return "LEAD • \(detection.label.uppercased()) \(confidence)%"
+        }
+        return "\(detection.label.uppercased()) \(confidence)%"
     }
 
     private func displayRect(for normalized: CGRect, in size: CGSize) -> CGRect {
@@ -102,7 +117,8 @@ struct ADASOverlayView: View {
     private func roadGuide(in size: CGSize) -> some View {
         Canvas { context, canvasSize in
             let centerX = canvasSize.width / 2
-            let horizonY = canvasSize.height * 0.42
+            let clampedHorizon = min(max(horizonRatio, 0.20), 0.75)
+            let horizonY = canvasSize.height * clampedHorizon
             let bottomY = canvasSize.height * 0.9
 
             var left = Path()
