@@ -1,0 +1,24 @@
+name: xADAS-iOS
+options:
+  bundleIdPrefix: com.hmtnvac
+  deploymentTarget:
+    iOS: "17.0"
+settings:
+  base:
+    SWIFT_VERSION: 5.0
+targets:
+  xADAS-iOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: xADAS-iOS
+    info:
+      path: xADAS-iOS/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.hmtnvac.xadas
+        TARGETED_DEVICE_FAMILY: "1"
+        INFOPLIST_FILE: xADAS-iOS/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        SUPPORTS_MACCATALYST: NO
+        CODE_SIGN_STYLE: Automatic
