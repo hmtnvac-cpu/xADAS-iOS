@@ -22,8 +22,11 @@ struct DriveView: View {
                 isCameraRunning: camera.isRunning,
                 fps: camera.fps,
                 pipelineStatus: camera.frameProcessor.pipelineStatus,
+                detectorStatus: camera.frameProcessor.detectorStatus,
+                inferenceMS: camera.frameProcessor.inferenceMS,
                 frameWidth: camera.frameProcessor.frameWidth,
-                frameHeight: camera.frameProcessor.frameHeight
+                frameHeight: camera.frameProcessor.frameHeight,
+                detections: camera.frameProcessor.detections
             )
 
             if camera.authorizationStatus == .denied || camera.authorizationStatus == .restricted {
