@@ -2,12 +2,15 @@
 
 Native iPhone ADAS vision prototype built with SwiftUI and AVFoundation.
 
-## V0.1
+## V0.2
 
 - Rear camera live preview
 - Landscape-only driving UI
 - xADAS HUD overlay shell
-- Camera state + FPS placeholder
+- Real camera FPS measurement
+- `AVCaptureVideoDataOutput` frame stream
+- YUV `CVPixelBuffer` pipeline ready for AI inference
+- Live frame resolution/status in HUD
 - Road guide + horizon overlay
 - CALIBRATE screen
 - SETTING screen
@@ -34,16 +37,35 @@ Then in Xcode:
 
 The iOS Simulator does not provide the rear-camera experience required for this prototype, so test on a physical iPhone.
 
+## Processing pipeline
+
+```text
+Rear Camera
+    ↓
+AVCaptureSession
+    ↓
+AVCaptureVideoDataOutput
+    ↓
+CMSampleBuffer / CVPixelBuffer (YUV)
+    ↓
+FrameProcessor
+    ↓
+Lead Vehicle Detector   ← next
+    ↓
+Distance / Lane / SuperCombo
+```
+
 ## Roadmap
 
 1. Camera + overlay ✅
-2. Lead vehicle detection
-3. Distance estimation
-4. Lane detection
-5. Persistent camera calibration
-6. SuperCombo integration
-7. FCW / lane departure warnings
-8. Video and telemetry logging
+2. Realtime frame pipeline + FPS ✅
+3. Lead vehicle detection
+4. Distance estimation
+5. Lane detection
+6. Persistent camera calibration
+7. SuperCombo integration
+8. FCW / lane departure warnings
+9. Video and telemetry logging
 
 ## Safety
 
