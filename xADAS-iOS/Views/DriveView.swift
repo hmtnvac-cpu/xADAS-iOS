@@ -29,7 +29,7 @@ struct DriveView: View {
                 frameWidth: camera.frameProcessor.frameWidth,
                 frameHeight: camera.frameProcessor.frameHeight,
                 detections: camera.frameProcessor.detections,
-                leadDistanceMeters: camera.frameProcessor.leadDistanceMeters,
+                leadDistanceState: camera.frameProcessor.leadDistanceState,
                 horizonRatio: horizonRatio,
                 laneDetection: camera.frameProcessor.laneDetection,
                 laneStatus: camera.frameProcessor.laneStatus,
@@ -63,6 +63,11 @@ struct DriveView: View {
         .onDisappear { camera.stop() }
         .onChange(of: camera.frameProcessor.laneDepartureState) { state in
             guard state == .warningLeft || state == .warningRight else { return }
+            AudioServicesPlaySystemSound(1057)
+            AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
+        }
+        .onChange(of: camera.frameProcessor.leadDistanceState.risk) { risk in
+            guard risk == .danger else { return }
             AudioServicesPlaySystemSound(1057)
             AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
         }
