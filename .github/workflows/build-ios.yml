@@ -34,7 +34,14 @@ jobs:
       - name: Verify deployment target before build
         run: |
           set -euo pipefail
-          TARGET=$(xcodebuild -project xADAS-iOS.xcodeproj -scheme xADAS-iOS -showBuildSettings | awk '/IPHONEOS_DEPLOYMENT_TARGET/ {print $3; exit}')
+          SETTINGS=$(xcodebuild \
+            -project xADAS-iOS.xcodeproj \
+            -scheme xADAS-iOS \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -showBuildSettings)
+
+          TARGET=$(printf '%s\n' "$SETTINGS" | awk '$1 == "IPHONEOS_DEPLOYMENT_TARGET" && $2 == "=" {print $3; exit}')
           echo "IPHONEOS_DEPLOYMENT_TARGET=$TARGET"
           test "$TARGET" = "16.0"
 
@@ -46,6 +53,7 @@ jobs:
             -scheme xADAS-iOS \
             -configuration Release \
             -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
