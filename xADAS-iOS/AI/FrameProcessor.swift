@@ -12,6 +12,11 @@ final class FrameProcessor: ObservableObject {
     @Published private(set) var inferenceMS: Double = 0
     @Published private(set) var detectorStatus = "MODEL NOT LOADED"
     @Published private(set) var leadDistanceMeters: Double?
+    @Published private(set) var leadDistanceState = LeadDistanceState(
+        distanceMeters: nil,
+        closingSpeedMetersPerSecond: nil,
+        risk: .unavailable
+    )
     @Published private(set) var laneDetection: LaneDetection?
     @Published private(set) var laneDepartureState: LaneDepartureState = .unavailable
     @Published private(set) var laneStatus = "LANE DETECTOR READY"
@@ -26,6 +31,7 @@ final class FrameProcessor: ObservableObject {
     private let laneStride = 4
     private let detector: VehicleDetector?
     private let distanceEstimator = DistanceEstimator()
+    private let leadDistanceTracker = LeadDistanceTracker()
     private let laneDetector = LaneDetector()
     private let laneDepartureMonitor = LaneDepartureMonitor()
 
@@ -48,10 +54,12 @@ final class FrameProcessor: ObservableObject {
 
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
+        let sampleTime = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
+        let timestamp = sampleTime.isFinite ? sampleTime : ProcessInfo.processInfo.systemUptime
 
         var newDetections: [VehicleDetection]?
         var newInferenceMS: Double?
-        var newLeadDistance: Double?
+        var newLeadState: LeadDistanceState?
         var newLaneDetection: LaneDetection?
         var laneWasEvaluated = false
         var newLaneState: LaneDepartureState?
@@ -63,16 +71,27 @@ final class FrameProcessor: ObservableObject {
                 var measured = result.detections
 
                 if let leadIndex = measured.firstIndex(where: { $0.isLead }) {
-                    let distance = distanceEstimator.estimate(
-                        for: measured[leadIndex].boundingBox,
+                    let leadBox = measured[leadIndex].boundingBox
+                    let rawDistance = distanceEstimator.estimate(
+                        for: leadBox,
                         frameWidth: width,
                         frameHeight: height,
                         horizontalFieldOfViewDegrees: horizontalFieldOfViewDegrees
                     )
-                    measured[leadIndex] = measured[leadIndex].withDistance(distance)
-                    newLeadDistance = distance
+                    let tracked = leadDistanceTracker.update(
+                        rawDistance: rawDistance,
+                        leadBox: leadBox,
+                        timestamp: timestamp
+                    )
+                    measured[leadIndex] = measured[leadIndex].withDistance(tracked.distanceMeters)
+                    newLeadState = tracked
                 } else {
-                    distanceEstimator.reset()
+                    leadDistanceTracker.reset()
+                    newLeadState = LeadDistanceState(
+                        distanceMeters: nil,
+                        closingSpeedMetersPerSecond: nil,
+                        risk: .unavailable
+                    )
                 }
 
                 newDetections = measured
@@ -116,7 +135,10 @@ final class FrameProcessor: ObservableObject {
 
             if let newDetections {
                 self.detections = newDetections
-                self.leadDistanceMeters = newLeadDistance
+                if let newLeadState {
+                    self.leadDistanceState = newLeadState
+                    self.leadDistanceMeters = newLeadState.distanceMeters
+                }
                 self.detectorStatus = newDetections.isEmpty
                     ? "VEHICLE MODEL ACTIVE • NO VEHICLE"
                     : "VEHICLE MODEL ACTIVE • \(newDetections.count) VEHICLE(S)"
