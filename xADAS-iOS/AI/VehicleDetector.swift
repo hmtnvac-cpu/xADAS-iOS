@@ -46,7 +46,7 @@ final class VehicleDetector {
 
     func detect(
         pixelBuffer: CVPixelBuffer,
-        orientation: CGImagePropertyOrientation = .right
+        orientation: CGImagePropertyOrientation = .up
     ) throws -> (detections: [VehicleDetection], inferenceMS: Double) {
         let started = CFAbsoluteTimeGetCurrent()
         let handler = VNImageRequestHandler(
