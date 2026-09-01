@@ -14,8 +14,9 @@ struct SettingsView: View {
                 }
 
                 Section("Build") {
-                    LabeledContent("Version", value: "0.1")
-                    LabeledContent("AI model", value: "Not loaded")
+                    LabeledContent("Version", value: "0.2")
+                    LabeledContent("Frame pipeline", value: "Enabled")
+                    LabeledContent("Lead vehicle model", value: "Not loaded")
                 }
             }
             .navigationTitle("Settings")
