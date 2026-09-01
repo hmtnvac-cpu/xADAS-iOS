@@ -14,6 +14,12 @@ targets:
       - path: xADAS-iOS
     info:
       path: xADAS-iOS/Info.plist
+      properties:
+        NSCameraUsageDescription: "xADAS uses the rear camera for real-time driver-assistance vision processing."
+        UIRequiresFullScreen: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.hmtnvac.xadas
