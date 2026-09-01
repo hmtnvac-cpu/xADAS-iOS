@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import AudioToolbox
 
 struct DriveView: View {
     @StateObject private var camera = CameraManager()
@@ -29,7 +30,10 @@ struct DriveView: View {
                 frameHeight: camera.frameProcessor.frameHeight,
                 detections: camera.frameProcessor.detections,
                 leadDistanceMeters: camera.frameProcessor.leadDistanceMeters,
-                horizonRatio: horizonRatio
+                horizonRatio: horizonRatio,
+                laneDetection: camera.frameProcessor.laneDetection,
+                laneStatus: camera.frameProcessor.laneStatus,
+                laneDepartureState: camera.frameProcessor.laneDepartureState
             )
 
             if camera.authorizationStatus == .denied || camera.authorizationStatus == .restricted {
@@ -57,6 +61,11 @@ struct DriveView: View {
         }
         .onAppear { camera.start() }
         .onDisappear { camera.stop() }
+        .onChange(of: camera.frameProcessor.laneDepartureState) { state in
+            guard state == .warningLeft || state == .warningRight else { return }
+            AudioServicesPlaySystemSound(1057)
+            AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
+        }
         .persistentSystemOverlays(.hidden)
     }
 
