@@ -12,15 +12,22 @@ final class FrameProcessor: ObservableObject {
     @Published private(set) var inferenceMS: Double = 0
     @Published private(set) var detectorStatus = "MODEL NOT LOADED"
     @Published private(set) var leadDistanceMeters: Double?
+    @Published private(set) var laneDetection: LaneDetection?
+    @Published private(set) var laneDepartureState: LaneDepartureState = .unavailable
+    @Published private(set) var laneStatus = "LANE DETECTOR READY"
 
     var horizontalFieldOfViewDegrees: Double = 0
 
     private var totalFrames: UInt64 = 0
     private var lastPublishedAt = ProcessInfo.processInfo.systemUptime
     private var inferenceFrameCounter = 0
+    private var laneFrameCounter = 0
     private let inferenceStride = 2
+    private let laneStride = 4
     private let detector: VehicleDetector?
     private let distanceEstimator = DistanceEstimator()
+    private let laneDetector = LaneDetector()
+    private let laneDepartureMonitor = LaneDepartureMonitor()
 
     init() {
         do {
@@ -37,6 +44,7 @@ final class FrameProcessor: ObservableObject {
 
         totalFrames &+= 1
         inferenceFrameCounter &+= 1
+        laneFrameCounter &+= 1
 
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
@@ -44,6 +52,9 @@ final class FrameProcessor: ObservableObject {
         var newDetections: [VehicleDetection]?
         var newInferenceMS: Double?
         var newLeadDistance: Double?
+        var newLaneDetection: LaneDetection?
+        var laneWasEvaluated = false
+        var newLaneState: LaneDepartureState?
 
         if inferenceFrameCounter >= inferenceStride, let detector {
             inferenceFrameCounter = 0
@@ -74,10 +85,18 @@ final class FrameProcessor: ObservableObject {
             }
         }
 
+        if laneFrameCounter >= laneStride {
+            laneFrameCounter = 0
+            laneWasEvaluated = true
+            let lane = laneDetector.detect(pixelBuffer: pixelBuffer)
+            newLaneDetection = lane
+            newLaneState = laneDepartureMonitor.update(with: lane)
+        }
+
         let now = ProcessInfo.processInfo.systemUptime
         let shouldPublishMetrics = now - lastPublishedAt >= 0.25
 
-        guard shouldPublishMetrics || newDetections != nil else { return }
+        guard shouldPublishMetrics || newDetections != nil || laneWasEvaluated else { return }
 
         if shouldPublishMetrics {
             lastPublishedAt = now
@@ -105,6 +124,23 @@ final class FrameProcessor: ObservableObject {
 
             if let newInferenceMS {
                 self.inferenceMS = newInferenceMS
+            }
+
+            if laneWasEvaluated {
+                self.laneDetection = newLaneDetection
+                if let newLaneState {
+                    self.laneDepartureState = newLaneState
+                }
+
+                if let lane = newLaneDetection {
+                    self.laneStatus = String(
+                        format: "LANE ACTIVE • %.0f%% • OFFSET %+.2f",
+                        lane.confidence * 100,
+                        lane.normalizedCenterOffset
+                    )
+                } else {
+                    self.laneStatus = "LANE SEARCHING"
+                }
             }
         }
     }
