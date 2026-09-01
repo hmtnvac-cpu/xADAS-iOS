@@ -18,7 +18,13 @@ struct DriveView: View {
             )
             .ignoresSafeArea()
 
-            ADASOverlayView(isCameraRunning: camera.isRunning)
+            ADASOverlayView(
+                isCameraRunning: camera.isRunning,
+                fps: camera.fps,
+                pipelineStatus: camera.frameProcessor.pipelineStatus,
+                frameWidth: camera.frameProcessor.frameWidth,
+                frameHeight: camera.frameProcessor.frameHeight
+            )
 
             if camera.authorizationStatus == .denied || camera.authorizationStatus == .restricted {
                 permissionOverlay
