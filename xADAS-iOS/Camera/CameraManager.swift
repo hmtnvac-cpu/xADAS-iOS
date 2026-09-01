@@ -118,9 +118,14 @@ final class CameraManager: NSObject, ObservableObject {
         }
         session.addOutput(videoOutput)
 
-        if let connection = videoOutput.connection(with: .video),
-           connection.isVideoRotationAngleSupported(0) {
-            connection.videoRotationAngle = 0
+        if let connection = videoOutput.connection(with: .video) {
+            if #available(iOS 17.0, *) {
+                if connection.isVideoRotationAngleSupported(0) {
+                    connection.videoRotationAngle = 0
+                }
+            } else if connection.isVideoOrientationSupported {
+                connection.videoOrientation = .landscapeRight
+            }
         }
     }
 
