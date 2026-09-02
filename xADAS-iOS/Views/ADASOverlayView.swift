@@ -24,7 +24,7 @@ struct ADASOverlayView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("xADAS")
                                 .font(.title2.bold())
-                            Text(isCameraRunning ? "CAMERA ONLINE" : "CAMERA STARTING")
+                            Text(isCameraRunning ? "70MAI ONLINE" : "70MAI STARTING")
                                 .font(.caption2.monospaced().bold())
                                 .foregroundStyle(isCameraRunning ? .green : .yellow)
                             Text(pipelineStatus)
@@ -41,9 +41,9 @@ struct ADASOverlayView: View {
                         Spacer()
 
                         VStack(alignment: .trailing, spacing: 4) {
-                            Text("V0.6")
+                            Text("V0.9.0")
                                 .font(.caption.monospaced().bold())
-                            Text(String(format: "FPS %.1f", fps))
+                            Text(String(format: "AI FPS %.1f", fps))
                                 .font(.caption2.monospaced())
                             Text(String(format: "AI %.1f ms", inferenceMS))
                                 .font(.caption2.monospaced())
