@@ -28,7 +28,7 @@ struct ADASOverlayView: View {
                                 Circle()
                                     .fill(isCameraRunning ? .green : .yellow)
                                     .frame(width: 7, height: 7)
-                                Text(isCameraRunning ? "70MAI" : "CONNECTING")
+                                Text(cameraLabel)
                                     .font(.caption2.monospaced().bold())
                             }
                         }
@@ -76,6 +76,18 @@ struct ADASOverlayView: View {
             .foregroundStyle(.white)
         }
         .allowsHitTesting(false)
+    }
+
+    private var cameraLabel: String {
+        if isCameraRunning { return "70MAI" }
+        if pipelineStatus.contains("NO RTP") { return "NO RTP" }
+        if pipelineStatus.contains("RTP RECEIVING") { return "DECODING" }
+        if pipelineStatus.contains("WAITING RTP") { return "WAITING RTP" }
+        if pipelineStatus.contains("SETUP") { return "RTSP READY" }
+        if pipelineStatus.contains("FAILED") || pipelineStatus.contains("ERROR") {
+            return "CAMERA ERROR"
+        }
+        return "CONNECTING"
     }
 
     private var distanceColor: Color {
