@@ -34,6 +34,14 @@ struct ADASOverlayView: View {
                         }
 
                         Spacer()
+
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(laneIndicatorColor)
+                                .frame(width: 7, height: 7)
+                            Text(laneIndicatorText)
+                                .font(.caption2.monospaced().bold())
+                        }
                     }
                     .padding(.horizontal, 20)
                     .padding(.top, 12)
@@ -92,6 +100,23 @@ struct ADASOverlayView: View {
             return "CAMERA ERROR"
         }
         return "CONNECTING"
+    }
+
+    private var laneIndicatorText: String {
+        if laneStatus.contains("ACTIVE") { return "LANE AI • LOCK" }
+        if laneStatus.contains("ERROR") || laneStatus.contains("missing") || laneStatus.contains("Missing") {
+            return "LANE AI • ERROR"
+        }
+        if laneStatus.contains("SEARCHING") { return "LANE AI • SEARCH" }
+        return "LANE AI • READY"
+    }
+
+    private var laneIndicatorColor: Color {
+        if laneStatus.contains("ACTIVE") { return .green }
+        if laneStatus.contains("ERROR") || laneStatus.contains("missing") || laneStatus.contains("Missing") {
+            return .red
+        }
+        return .yellow
     }
 
     private var distanceColor: Color {
