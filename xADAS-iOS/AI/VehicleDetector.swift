@@ -1,5 +1,7 @@
 import CoreFoundation
+import CoreImage
 import CoreML
+import CoreVideo
 import ImageIO
 import Vision
 
@@ -26,6 +28,7 @@ final class VehicleDetector {
         (7, "truck")
     ]
     private let request: VNCoreMLRequest
+    private let ciContext = CIContext(options: [.cacheIntermediates: false])
 
     init() throws {
         guard let compiledURL = Bundle.main.url(
@@ -55,8 +58,9 @@ final class VehicleDetector {
         orientation: CGImagePropertyOrientation = .up
     ) throws -> (detections: [VehicleDetection], inferenceMS: Double) {
         let started = CFAbsoluteTimeGetCurrent()
+        let prepared = makeLeadVehicleCrop(from: pixelBuffer)
         let handler = VNImageRequestHandler(
-            cvPixelBuffer: pixelBuffer,
+            cvPixelBuffer: prepared.pixelBuffer,
             orientation: orientation,
             options: [:]
         )
@@ -88,6 +92,10 @@ final class VehicleDetector {
         if vehicles.isEmpty {
             vehicles = decodeFeatureArrays(from: observations)
         }
+
+        // The far-vehicle pass uses a calibrated road ROI so a car at 55 m
+        // occupies more model pixels. Map detections back to full-frame space.
+        vehicles = vehicles.map { map($0, from: prepared.roi) }
 
         guard !vehicles.isEmpty else {
             return ([], elapsedMS)
@@ -171,9 +179,13 @@ final class VehicleDetector {
     }
 
     private func selectLeadIndex(in detections: [VehicleDetection]) -> Int? {
+        let calibratedCenter = CGFloat(UserDefaults.standard.double(
+            forKey: DistanceEstimator.cameraCenterXKey
+        ))
+        let cameraCenter = calibratedCenter > 0.1 ? calibratedCenter : 0.5
         let candidates = detections.indices.filter { index in
             let box = detections[index].boundingBox
-            let centerDistance = abs(box.midX - 0.5)
+            let centerDistance = abs(box.midX - cameraCenter)
 
             // Keep the lead candidate inside a broad forward-driving corridor.
             return centerDistance <= 0.28 && box.maxY >= 0.12
@@ -184,9 +196,94 @@ final class VehicleDetector {
         }
     }
 
+    private func makeLeadVehicleCrop(
+        from pixelBuffer: CVPixelBuffer
+    ) -> (pixelBuffer: CVPixelBuffer, roi: CGRect) {
+        let sourceWidth = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
+        let sourceHeight = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
+        guard sourceWidth > 0, sourceHeight > 0 else {
+            return (pixelBuffer, CGRect(x: 0, y: 0, width: 1, height: 1))
+        }
+
+        let defaults = UserDefaults.standard
+        let savedCenter = defaults.double(forKey: DistanceEstimator.cameraCenterXKey)
+        let savedWidth = defaults.double(forKey: DistanceEstimator.vehicleROIWidthKey)
+        let center = CGFloat(savedCenter > 0.1 ? savedCenter : 0.5)
+        let width = CGFloat(min(max(savedWidth, 0.42), 0.76))
+        let roi = CGRect(
+            x: min(max(center - width / 2, 0), 1 - width),
+            y: 0.08,
+            width: width,
+            height: 0.78
+        )
+
+        let outputWidth = 640
+        let outputHeight = 480
+        var output: CVPixelBuffer?
+        let attributes: [CFString: Any] = [
+            kCVPixelBufferIOSurfacePropertiesKey: [:],
+            kCVPixelBufferMetalCompatibilityKey: true
+        ]
+        guard CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            outputWidth,
+            outputHeight,
+            kCVPixelFormatType_32BGRA,
+            attributes as CFDictionary,
+            &output
+        ) == kCVReturnSuccess, let output else {
+            return (pixelBuffer, CGRect(x: 0, y: 0, width: 1, height: 1))
+        }
+
+        let crop = CGRect(
+            x: roi.minX * sourceWidth,
+            y: roi.minY * sourceHeight,
+            width: roi.width * sourceWidth,
+            height: roi.height * sourceHeight
+        )
+        let source = CIImage(cvPixelBuffer: pixelBuffer)
+            .cropped(to: crop)
+            .transformed(by: CGAffineTransform(
+                translationX: -crop.minX,
+                y: -crop.minY
+            ))
+            .transformed(by: CGAffineTransform(
+                scaleX: CGFloat(outputWidth) / crop.width,
+                y: CGFloat(outputHeight) / crop.height
+            ))
+        ciContext.render(
+            source,
+            to: output,
+            bounds: CGRect(x: 0, y: 0, width: outputWidth, height: outputHeight),
+            colorSpace: CGColorSpaceCreateDeviceRGB()
+        )
+        return (output, roi)
+    }
+
+    private func map(_ detection: VehicleDetection, from roi: CGRect) -> VehicleDetection {
+        let box = detection.boundingBox
+        let mapped = CGRect(
+            x: roi.minX + box.minX * roi.width,
+            y: roi.minY + box.minY * roi.height,
+            width: box.width * roi.width,
+            height: box.height * roi.height
+        )
+        return VehicleDetection(
+            label: detection.label,
+            confidence: detection.confidence,
+            boundingBox: mapped,
+            isLead: detection.isLead,
+            distanceMeters: detection.distanceMeters
+        )
+    }
+
     private func leadScore(_ detection: VehicleDetection) -> CGFloat {
         let box = detection.boundingBox
-        let centerPenalty = abs(box.midX - 0.5) * 2.5
+        let savedCenter = CGFloat(UserDefaults.standard.double(
+            forKey: DistanceEstimator.cameraCenterXKey
+        ))
+        let cameraCenter = savedCenter > 0.1 ? savedCenter : 0.5
+        let centerPenalty = abs(box.midX - cameraCenter) * 2.5
         let bottomPenalty = box.minY
         let sizeBonus = box.width * box.height * 0.7
         return centerPenalty + bottomPenalty - sizeBonus
