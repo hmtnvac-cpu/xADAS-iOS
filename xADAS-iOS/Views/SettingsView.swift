@@ -28,7 +28,17 @@ struct SettingsView: View {
                             .font(.footnote.monospaced())
                     }
 
-                    Text("The RTSP source is fixed to the exact URL confirmed working in VLC. xADAS does not send record, album or configuration commands to the dashcam.")
+                    Text("The RTSP source is fixed to the URL confirmed working on the A500S. xADAS does not send record, album or configuration commands to the dashcam.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("ADAS") {
+                    LabeledContent("Vehicle / lead", value: "Enabled")
+                    LabeledContent("Lead distance", value: "Enabled")
+                    LabeledContent("Lane / LDW", value: "Enabled")
+                    LabeledContent("Audio + vibration", value: "Enabled")
+                    Text("Re-run CALIBRATE after switching from the iPhone camera to the fixed 70mai camera so distance and horizon match the dashcam mounting position.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -38,7 +48,7 @@ struct SettingsView: View {
                         Text("Reference distance: \(Int(referenceDistance)) m")
                         Slider(value: $referenceDistance, in: 20...120, step: 5)
                     }
-                    Text("This threshold is still manual. Automatic speed-based distance rules will be added after the 70mai video pipeline is stable.")
+                    Text("The prototype uses this manual reference threshold for caution/danger classification.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -49,10 +59,11 @@ struct SettingsView: View {
                 }
 
                 Section("Build") {
-                    LabeledContent("Version", value: "0.8.2")
+                    LabeledContent("Version", value: "0.9.0")
                     LabeledContent("Minimum iOS", value: "16.0")
                     LabeledContent("Video source", value: "70mai A500S RTSP only")
-                    LabeledContent("RTSP transport", value: "VLC default negotiation")
+                    LabeledContent("RTSP", value: "Auto reconnect + 700 ms cache")
+                    LabeledContent("AI bridge", value: "Decoded VLC snapshots")
                 }
             }
             .navigationTitle("Settings")
