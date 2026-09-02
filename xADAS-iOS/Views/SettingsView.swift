@@ -71,10 +71,10 @@ struct SettingsView: View {
                 }
 
                 Section("Build") {
-                    LabeledContent("Version", value: "0.9.4")
+                    LabeledContent("Version", value: "0.9.5")
                     LabeledContent("Minimum iOS", value: "16.0")
                     LabeledContent("Video source", value: "70mai A500S RTSP only")
-                    LabeledContent("RTSP", value: "Native low-latency + watchdog")
+                    LabeledContent("RTSP", value: "Low-cache VLC + watchdog")
                     LabeledContent("Lane model", value: "UFLD V2 • on-device")
                 }
             }
