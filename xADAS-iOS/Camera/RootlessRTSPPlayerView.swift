@@ -101,7 +101,7 @@ final class RootlessRTSPPlayerView: UIView {
     }
 }
 
-private enum RTSPTransportMode {
+private enum RTSPTransportMode: Equatable {
     case udp
     case tcp
 }
