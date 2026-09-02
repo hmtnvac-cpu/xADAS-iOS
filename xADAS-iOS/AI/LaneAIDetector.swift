@@ -69,7 +69,12 @@ final class LaneAIDetector {
         let inputValue = try ORTValue(
             tensorData: NSMutableData(data: inputData),
             elementType: .float,
-            shape: [1, 3, Self.inputHeight, Self.inputWidth]
+            shape: [
+                NSNumber(value: 1),
+                NSNumber(value: 3),
+                NSNumber(value: Self.inputHeight),
+                NSNumber(value: Self.inputWidth)
+            ]
         )
 
         let outputs = try session.run(
