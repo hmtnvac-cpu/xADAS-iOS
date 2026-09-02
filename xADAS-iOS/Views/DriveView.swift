@@ -22,7 +22,7 @@ struct DriveView: View {
             .ignoresSafeArea()
 
             ADASOverlayView(
-                isCameraRunning: rtspStatus.contains("PLAYING"),
+                isCameraRunning: frameProcessor.frameWidth > 0 && frameProcessor.frameHeight > 0,
                 fps: rtspStatus.contains("PLAYING") ? 4.5 : 0,
                 pipelineStatus: frameProcessor.pipelineStatus,
                 detectorStatus: frameProcessor.detectorStatus,
@@ -38,25 +38,9 @@ struct DriveView: View {
             )
 
             VStack {
-                HStack {
-                    Spacer()
-                    VStack(alignment: .trailing, spacing: 3) {
-                        Text("V0.9.0")
-                            .font(.caption.monospaced().bold())
-                        Text("70MAI • RTSP • ADAS")
-                            .font(.caption2.monospaced().bold())
-                            .foregroundStyle(.cyan)
-                        Text(rtspStatus)
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(rtspStatus.contains("ERROR") ? .red : .white.opacity(0.85))
-                    }
-                    .padding(.trailing, 20)
-                    .padding(.top, 12)
-                }
-
                 Spacer()
 
-                if !rtspStatus.contains("PLAYING") {
+                if frameProcessor.frameWidth == 0 || frameProcessor.frameHeight == 0 {
                     Button("RETRY 70MAI") {
                         rtspStatus = "70MAI RETRYING"
                         restartToken = UUID()
