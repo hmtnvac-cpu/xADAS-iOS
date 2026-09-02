@@ -4,11 +4,15 @@ import Foundation
 final class DistanceEstimator {
     static let cameraHeightKey = "xadas.calibration.cameraHeight"
     static let horizonRatioKey = "xadas.calibration.horizonRatio"
+    static let cameraCenterXKey = "xadas.calibration.centerX"
+    static let vehicleROIWidthKey = "xadas.calibration.vehicleROIWidth"
 
     init() {
         UserDefaults.standard.register(defaults: [
             Self.cameraHeightKey: 1.25,
-            Self.horizonRatioKey: 0.42
+            Self.horizonRatioKey: 0.42,
+            Self.cameraCenterXKey: 0.50,
+            Self.vehicleROIWidthKey: 0.58
         ])
     }
 
