@@ -5,6 +5,7 @@ struct SettingsView: View {
     @State private var showRoadGuide = true
     @State private var showDebugHUD = true
     @AppStorage(LeadDistanceTracker.referenceDistanceKey) private var referenceDistance: Double = 55
+    @AppStorage(DistanceEstimator.cameraHeightKey) private var cameraHeight: Double = 1.25
     @StateObject private var rtspProbe = RTSPProbe()
     @StateObject private var warningManager = ADASWarningManager()
 
@@ -52,6 +53,10 @@ struct SettingsView: View {
 
                 Section("Distance") {
                     VStack(alignment: .leading, spacing: 8) {
+                        Text("Camera height: \(cameraHeight, specifier: "%.2f") m")
+                        Slider(value: $cameraHeight, in: 0.60...2.00, step: 0.01)
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
                         Text("Reference distance: \(Int(referenceDistance)) m")
                         Slider(value: $referenceDistance, in: 20...120, step: 5)
                     }
@@ -66,10 +71,10 @@ struct SettingsView: View {
                 }
 
                 Section("Build") {
-                    LabeledContent("Version", value: "0.9.3")
+                    LabeledContent("Version", value: "0.9.4")
                     LabeledContent("Minimum iOS", value: "16.0")
                     LabeledContent("Video source", value: "70mai A500S RTSP only")
-                    LabeledContent("RTSP", value: "Auto reconnect + 700 ms cache")
+                    LabeledContent("RTSP", value: "Native low-latency + watchdog")
                     LabeledContent("Lane model", value: "UFLD V2 • on-device")
                 }
             }
