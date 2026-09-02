@@ -28,7 +28,7 @@ final class FrameProcessor: ObservableObject {
     private var inferenceFrameCounter = 0
     private var laneFrameCounter = 0
     private let inferenceStride = 2
-    private let laneStride = 3
+    private let laneStride = 2
     private let detector: VehicleDetector?
     private let distanceEstimator = DistanceEstimator()
     private let leadDistanceTracker = LeadDistanceTracker()

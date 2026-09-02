@@ -1,16 +1,24 @@
 import AVFoundation
 import AudioToolbox
+import Combine
 import Foundation
 
-final class ADASWarningManager {
+final class ADASWarningManager: ObservableObject {
     private var player: AVAudioPlayer?
+    private let speechSynthesizer = AVSpeechSynthesizer()
     private var lastDistanceAlertAt: TimeInterval = 0
     private var lastLaneAlertAt: TimeInterval = 0
+    private var lastSpeechAt: TimeInterval = 0
+    private var lastSpokenKey = ""
     private var lastDistanceRisk: LeadDistanceRisk = .unavailable
     private var lastLaneState: LaneDepartureState = .unavailable
 
     init() {
-        try? AVAudioSession.sharedInstance().setCategory(.ambient, options: [.mixWithOthers])
+        try? AVAudioSession.sharedInstance().setCategory(
+            .playback,
+            mode: .voicePrompt,
+            options: [.duckOthers]
+        )
         try? AVAudioSession.sharedInstance().setActive(true)
         player = try? AVAudioPlayer(data: Self.makeBeepWAV())
         player?.prepareToPlay()
@@ -19,33 +27,78 @@ final class ADASWarningManager {
     func update(distance: LeadDistanceState, lane: LaneDepartureState) {
         let now = ProcessInfo.processInfo.systemUptime
 
-        if distance.risk == .danger,
-           (lastDistanceRisk != .danger || now - lastDistanceAlertAt >= 2.0) {
-            alert(strong: true)
+        let distanceDangerDue = distance.risk == .danger
+            && (lastDistanceRisk != .danger || now - lastDistanceAlertAt >= 2.0)
+        let distanceCautionDue = distance.risk == .caution
+            && lastDistanceRisk != .caution
+            && now - lastDistanceAlertAt >= 1.2
+        let laneWarning = lane == .warningLeft || lane == .warningRight
+        let previousLaneWarning = lastLaneState == .warningLeft || lastLaneState == .warningRight
+        let laneWarningDue = laneWarning
+            && (!previousLaneWarning || lane != lastLaneState || now - lastLaneAlertAt >= 3.0)
+
+        if distanceDangerDue {
+            alert(
+                strong: true,
+                message: "Cảnh báo, khoảng cách quá gần",
+                key: "distance-danger"
+            )
             lastDistanceAlertAt = now
-        } else if distance.risk == .caution,
-                  lastDistanceRisk != .caution,
-                  now - lastDistanceAlertAt >= 1.2 {
-            alert(strong: false)
+        } else if laneWarningDue {
+            let isLeft = lane == .warningLeft
+            alert(
+                strong: false,
+                message: isLeft ? "Cảnh báo lệch làn trái" : "Cảnh báo lệch làn phải",
+                key: isLeft ? "lane-left" : "lane-right"
+            )
+            lastLaneAlertAt = now
+        } else if distanceCautionDue {
+            alert(
+                strong: false,
+                message: "Chú ý khoảng cách",
+                key: "distance-caution"
+            )
             lastDistanceAlertAt = now
         }
         lastDistanceRisk = distance.risk
-
-        let laneWarning = lane == .warningLeft || lane == .warningRight
-        let previousLaneWarning = lastLaneState == .warningLeft || lastLaneState == .warningRight
-        if laneWarning,
-           (!previousLaneWarning || lane != lastLaneState || now - lastLaneAlertAt >= 3.0) {
-            alert(strong: false)
-            lastLaneAlertAt = now
-        }
         lastLaneState = lane
     }
 
-    private func alert(strong: Bool) {
+    func testWarning() {
+        alert(
+            strong: true,
+            message: "Hệ thống cảnh báo hoạt động",
+            key: "test",
+            forceSpeech: true
+        )
+    }
+
+    private func alert(
+        strong: Bool,
+        message: String,
+        key: String,
+        forceSpeech: Bool = false
+    ) {
+        try? AVAudioSession.sharedInstance().setActive(true)
         player?.currentTime = 0
-        player?.volume = strong ? 1.0 : 0.65
+        // Full app volume; the iPhone's system media volume remains the master control.
+        player?.volume = 1.0
         player?.play()
         AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
+
+        let now = ProcessInfo.processInfo.systemUptime
+        guard forceSpeech || key != lastSpokenKey || now - lastSpeechAt >= 5.0 else { return }
+
+        if speechSynthesizer.isSpeaking {
+            speechSynthesizer.stopSpeaking(at: .immediate)
+        }
+        let utterance = AVSpeechUtterance(string: message)
+        utterance.voice = AVSpeechSynthesisVoice(language: "vi-VN")
+        utterance.rate = 0.48
+        utterance.volume = 1.0
+        speechSynthesizer.speak(utterance)
+        lastSpokenKey = key
+        lastSpeechAt = now
     }
 
     private static func makeBeepWAV() -> Data {

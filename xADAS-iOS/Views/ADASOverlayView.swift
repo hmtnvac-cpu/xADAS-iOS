@@ -38,39 +38,39 @@ struct ADASOverlayView: View {
                     .padding(.horizontal, 20)
                     .padding(.top, 12)
 
-                    if let distance = leadDistanceState.distanceMeters {
-                        VStack(spacing: 3) {
-                            Text(String(format: "%.1f m", distance))
-                                .font(.system(size: 36, weight: .bold, design: .rounded))
-                        }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 7)
-                        .background(distanceColor.opacity(0.80), in: RoundedRectangle(cornerRadius: 12))
-                        .padding(.top, 8)
-                    }
-
-                    if let warning = laneDepartureState.displayText {
-                        Text("⚠︎ \(warning)")
-                            .font(.headline.monospaced().bold())
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(.red.opacity(0.85), in: RoundedRectangle(cornerRadius: 10))
-                            .padding(.top, 8)
-                    }
-
                     Spacer()
                 }
 
+                roadGuide(in: proxy.size)
+
                 if let laneDetection {
                     laneOverlay(laneDetection, in: proxy.size)
-                } else {
-                    roadGuide(in: proxy.size)
                 }
 
                 ForEach(detections) { detection in
                     detectionBox(detection, in: proxy.size)
+                }
+
+                if let distance = leadDistanceState.distanceMeters {
+                    Text(String(format: "%.1f m", distance))
+                        .font(.system(size: 34, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 7)
+                        .background(distanceColor.opacity(0.86), in: RoundedRectangle(cornerRadius: 12))
+                        .position(x: proxy.size.width / 2, y: proxy.size.height * 0.43)
+                }
+
+                laneDepartureIndicators(in: proxy.size)
+
+                if let warning = laneDepartureState.displayText {
+                    Text("⚠︎ \(warning)")
+                        .font(.headline.monospaced().bold())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(.red.opacity(0.92), in: RoundedRectangle(cornerRadius: 10))
+                        .position(x: proxy.size.width / 2, y: proxy.size.height * 0.20)
                 }
             }
             .foregroundStyle(.white)
@@ -157,19 +157,69 @@ struct ADASOverlayView: View {
                 if index == 0 { right.move(to: p) } else { right.addLine(to: p) }
             }
 
-            let warning = laneDepartureState == .warningLeft || laneDepartureState == .warningRight
-            let strokeColor: Color = warning ? .red : .cyan
-            context.stroke(left, with: .color(strokeColor.opacity(0.95)), lineWidth: warning && laneDepartureState == .warningLeft ? 6 : 4)
-            context.stroke(right, with: .color(strokeColor.opacity(0.95)), lineWidth: warning && laneDepartureState == .warningRight ? 6 : 4)
+            let leftWarning = laneDepartureState == .warningLeft
+            let rightWarning = laneDepartureState == .warningRight
+            let leftColor: Color = leftWarning ? .red : .cyan
+            let rightColor: Color = rightWarning ? .red : .cyan
+
+            context.stroke(left, with: .color(leftColor.opacity(0.30)), lineWidth: leftWarning ? 13 : 9)
+            context.stroke(right, with: .color(rightColor.opacity(0.30)), lineWidth: rightWarning ? 13 : 9)
+            context.stroke(left, with: .color(leftColor), lineWidth: leftWarning ? 7 : 4)
+            context.stroke(right, with: .color(rightColor), lineWidth: rightWarning ? 7 : 4)
         }
+    }
+
+    private func laneDepartureIndicators(in size: CGSize) -> some View {
+        let laneAvailable = laneDetection != nil
+        let leftWarning = laneDepartureState == .warningLeft
+        let rightWarning = laneDepartureState == .warningRight
+
+        return HStack {
+            laneIndicator(
+                symbol: "chevron.left.2",
+                title: leftWarning ? "LỆCH TRÁI" : nil,
+                active: laneAvailable,
+                warning: leftWarning
+            )
+
+            Spacer()
+
+            laneIndicator(
+                symbol: "chevron.right.2",
+                title: rightWarning ? "LỆCH PHẢI" : nil,
+                active: laneAvailable,
+                warning: rightWarning
+            )
+        }
+        .frame(width: max(size.width - 54, 1))
+        .position(x: size.width / 2, y: size.height * 0.63)
+    }
+
+    private func laneIndicator(
+        symbol: String,
+        title: String?,
+        active: Bool,
+        warning: Bool
+    ) -> some View {
+        VStack(spacing: 5) {
+            Image(systemName: symbol)
+                .font(.system(size: warning ? 46 : 36, weight: .black))
+            if let title {
+                Text(title)
+                    .font(.caption2.monospaced().bold())
+            }
+        }
+        .foregroundStyle(warning ? Color.red : Color.green.opacity(active ? 0.82 : 0.28))
+        .shadow(color: warning ? .red : .clear, radius: 8)
     }
 
     private func roadGuide(in size: CGSize) -> some View {
         Canvas { context, canvasSize in
             let centerX = canvasSize.width / 2
-            let clampedHorizon = min(max(horizonRatio, 0.20), 0.75)
+            let savedHorizon = min(max(horizonRatio, 0.20), 0.75)
+            let clampedHorizon = min(max(savedHorizon + 0.12, 0.46), 0.68)
             let horizonY = canvasSize.height * clampedHorizon
-            let bottomY = canvasSize.height * 0.9
+            let bottomY = canvasSize.height * 0.92
 
             var left = Path()
             left.move(to: CGPoint(x: centerX - canvasSize.width * 0.05, y: horizonY))
@@ -179,8 +229,8 @@ struct ADASOverlayView: View {
             right.move(to: CGPoint(x: centerX + canvasSize.width * 0.05, y: horizonY))
             right.addLine(to: CGPoint(x: centerX + canvasSize.width * 0.25, y: bottomY))
 
-            context.stroke(left, with: .color(.green.opacity(0.7)), lineWidth: 2)
-            context.stroke(right, with: .color(.green.opacity(0.7)), lineWidth: 2)
+            context.stroke(left, with: .color(.green.opacity(0.82)), lineWidth: 3)
+            context.stroke(right, with: .color(.green.opacity(0.82)), lineWidth: 3)
 
             let horizon = Path { path in
                 path.move(to: CGPoint(x: centerX - 45, y: horizonY))

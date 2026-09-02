@@ -17,6 +17,8 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         view.backgroundColor = .black
+        view.clipsToBounds = true
+        view.contentMode = .scaleAspectFill
         context.coordinator.attach(view: view, urlString: urlString, restartToken: restartToken)
         return view
     }
@@ -66,6 +68,7 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
         func attach(view: UIView, urlString: String, restartToken: UUID) {
             currentView = view
             player.drawable = view
+            applyFullscreenVideoAspect()
 
             let needsRestart = currentURL != urlString || currentRestartToken != restartToken
             guard needsRestart else { return }
@@ -98,12 +101,24 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
             player.media = media
             if let currentView {
                 player.drawable = currentView
+                applyFullscreenVideoAspect()
             }
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
                 guard let self, !self.stoppedByOwner else { return }
                 self.player.play()
+                self.applyFullscreenVideoAspect()
             }
+        }
+
+        private func applyFullscreenVideoAspect() {
+            let screen = UIScreen.main.bounds.size
+            let landscapeWidth = max(screen.width, screen.height)
+            let landscapeHeight = min(screen.width, screen.height)
+            guard landscapeWidth > 0, landscapeHeight > 0 else { return }
+
+            player.scaleFactor = 0
+            player.videoAspectRatio = "\(Int(landscapeWidth)):\(Int(landscapeHeight))"
         }
 
         func mediaPlayerStateChanged(_ newState: VLCMediaPlayerState) {
@@ -112,6 +127,7 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
                 setStatus("70MAI OPENING")
             case .playing:
                 consecutiveFailures = 0
+                applyFullscreenVideoAspect()
                 setStatus("70MAI PLAYING • ADAS ACTIVE")
                 startSnapshotLoop()
             case .paused:

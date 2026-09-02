@@ -5,15 +5,15 @@ final class LaneDepartureMonitor {
     private var rightCount = 0
     private var centeredCount = 0
 
-    private let triggerFrames = 4
+    private let triggerFrames = 2
     private let clearFrames = 3
-    private let warningOffset = 0.58
-    private let clearOffset = 0.42
+    private let warningOffset = 0.42
+    private let clearOffset = 0.28
 
     private(set) var state: LaneDepartureState = .unavailable
 
     func update(with detection: LaneDetection?) -> LaneDepartureState {
-        guard let detection, detection.confidence >= 0.32 else {
+        guard let detection, detection.confidence >= 0.28 else {
             leftCount = 0
             rightCount = 0
             centeredCount = 0

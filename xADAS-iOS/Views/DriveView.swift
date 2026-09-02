@@ -7,9 +7,9 @@ struct DriveView: View {
     @State private var rtspStatus = "70MAI STARTING"
     @State private var restartToken = UUID()
     @StateObject private var frameProcessor = FrameProcessor()
+    @StateObject private var warningManager = ADASWarningManager()
 
     private let seventyMaiURL = CameraSource.seventyMaiURL
-    private let warningManager = ADASWarningManager()
 
     var body: some View {
         ZStack {

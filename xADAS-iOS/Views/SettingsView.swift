@@ -6,6 +6,7 @@ struct SettingsView: View {
     @State private var showDebugHUD = true
     @AppStorage(LeadDistanceTracker.referenceDistanceKey) private var referenceDistance: Double = 55
     @StateObject private var rtspProbe = RTSPProbe()
+    @StateObject private var warningManager = ADASWarningManager()
 
     private let seventyMaiURL = CameraSource.seventyMaiURL
 
@@ -37,7 +38,13 @@ struct SettingsView: View {
                     LabeledContent("Vehicle / lead", value: "Enabled")
                     LabeledContent("Lead distance", value: "Enabled")
                     LabeledContent("Lane / LDW", value: "Enabled")
-                    LabeledContent("Audio + vibration", value: "Enabled")
+                    LabeledContent("Beep + voice + vibration", value: "Enabled")
+                    Button("TEST WARNING SOUND + VOICE") {
+                        warningManager.testWarning()
+                    }
+                    Text("Warning sound and Vietnamese voice use the iPhone system media volume.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                     Text("Re-run CALIBRATE after switching from the iPhone camera to the fixed 70mai camera so distance and horizon match the dashcam mounting position.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -59,7 +66,7 @@ struct SettingsView: View {
                 }
 
                 Section("Build") {
-                    LabeledContent("Version", value: "0.9.0")
+                    LabeledContent("Version", value: "0.9.1")
                     LabeledContent("Minimum iOS", value: "16.0")
                     LabeledContent("Video source", value: "70mai A500S RTSP only")
                     LabeledContent("RTSP", value: "Auto reconnect + 700 ms cache")

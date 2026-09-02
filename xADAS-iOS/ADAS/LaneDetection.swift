@@ -12,9 +12,9 @@ enum LaneDepartureState: String, Equatable {
         case .unavailable, .centered:
             return nil
         case .warningLeft:
-            return "LANE DEPARTURE • LEFT"
+            return "LỆCH LÀN TRÁI"
         case .warningRight:
-            return "LANE DEPARTURE • RIGHT"
+            return "LỆCH LÀN PHẢI"
         }
     }
 }

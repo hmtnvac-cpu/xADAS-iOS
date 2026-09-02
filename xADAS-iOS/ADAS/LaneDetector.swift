@@ -38,6 +38,7 @@ final class LaneDetector {
         let bytesPerRow = isPlanar
             ? CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
             : CVPixelBufferGetBytesPerRow(pixelBuffer)
+        let bytesPerPixel = isPlanar ? 1 : 4
 
         let startY = Int(Double(height) * 0.54)
         let endY = Int(Double(height) * 0.92)
@@ -60,6 +61,7 @@ final class LaneDetector {
                 xMinNorm: 0.08,
                 xMaxNorm: 0.48,
                 xStep: xStep,
+                bytesPerPixel: bytesPerPixel,
                 preferLeft: true
             ) {
                 leftSamples.append(sample)
@@ -72,6 +74,7 @@ final class LaneDetector {
                 xMinNorm: 0.52,
                 xMaxNorm: 0.92,
                 xStep: xStep,
+                bytesPerPixel: bytesPerPixel,
                 preferLeft: false
             ) {
                 rightSamples.append(sample)
@@ -133,6 +136,7 @@ final class LaneDetector {
         xMinNorm: Double,
         xMaxNorm: Double,
         xStep: Int,
+        bytesPerPixel: Int,
         preferLeft: Bool
     ) -> Sample? {
         let startX = max(4, Int(Double(width) * xMinNorm))
@@ -142,9 +146,9 @@ final class LaneDetector {
         var bestScore = 0.0
 
         for x in stride(from: startX, through: endX, by: xStep) {
-            let left = Int(row[x - 3])
-            let right = Int(row[x + 3])
-            let center = Int(row[x])
+            let left = luminance(row: row, x: x - 3, bytesPerPixel: bytesPerPixel)
+            let right = luminance(row: row, x: x + 3, bytesPerPixel: bytesPerPixel)
+            let center = luminance(row: row, x: x, bytesPerPixel: bytesPerPixel)
             let gradient = abs(right - left)
             let brightness = center
 
@@ -169,6 +173,20 @@ final class LaneDetector {
             y: yNorm,
             weight: min(bestScore / 90.0, 2.0)
         )
+    }
+
+    private func luminance(
+        row: UnsafePointer<UInt8>,
+        x: Int,
+        bytesPerPixel: Int
+    ) -> Int {
+        guard bytesPerPixel == 4 else { return Int(row[x]) }
+
+        let offset = x * 4
+        let blue = Int(row[offset])
+        let green = Int(row[offset + 1])
+        let red = Int(row[offset + 2])
+        return (29 * blue + 150 * green + 77 * red) >> 8
     }
 
     private func expectedLaneX(yNorm: Double, left: Bool) -> Double {
