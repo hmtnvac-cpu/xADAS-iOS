@@ -3,6 +3,10 @@ options:
   bundleIdPrefix: com.hmtnvac
   deploymentTarget:
     iOS: "16.0"
+packages:
+  VLCKit:
+    url: https://github.com/videolan/vlckit.git
+    branch: master
 settings:
   base:
     SWIFT_VERSION: 5.0
@@ -12,6 +16,9 @@ targets:
     platform: iOS
     sources:
       - path: xADAS-iOS
+    dependencies:
+      - package: VLCKit
+        product: VLCKit
     info:
       path: xADAS-iOS/Info.plist
       properties:
