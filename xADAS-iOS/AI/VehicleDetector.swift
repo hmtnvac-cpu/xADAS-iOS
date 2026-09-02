@@ -62,7 +62,7 @@ final class VehicleDetector {
 
         var vehicles = observations.compactMap { observation -> VehicleDetection? in
             guard let best = observation.labels.first,
-                  best.confidence >= 0.30,
+                  best.confidence >= 0.18,
                   vehicleLabels.contains(best.identifier.lowercased()) else {
                 return nil
             }

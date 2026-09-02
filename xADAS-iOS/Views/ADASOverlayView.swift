@@ -59,9 +59,15 @@ struct ADASOverlayView: View {
                         .padding(.vertical, 7)
                         .background(distanceColor.opacity(0.86), in: RoundedRectangle(cornerRadius: 12))
                         .position(x: proxy.size.width / 2, y: proxy.size.height * 0.43)
+                } else if isCameraRunning {
+                    Text("-- m")
+                        .font(.system(size: 30, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.75))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 6)
+                        .background(.black.opacity(0.48), in: RoundedRectangle(cornerRadius: 10))
+                        .position(x: proxy.size.width / 2, y: proxy.size.height * 0.43)
                 }
-
-                laneDepartureIndicators(in: proxy.size)
 
                 if let warning = laneDepartureState.displayText {
                     Text("⚠︎ \(warning)")
@@ -167,50 +173,6 @@ struct ADASOverlayView: View {
             context.stroke(left, with: .color(leftColor), lineWidth: leftWarning ? 7 : 4)
             context.stroke(right, with: .color(rightColor), lineWidth: rightWarning ? 7 : 4)
         }
-    }
-
-    private func laneDepartureIndicators(in size: CGSize) -> some View {
-        let laneAvailable = laneDetection != nil
-        let leftWarning = laneDepartureState == .warningLeft
-        let rightWarning = laneDepartureState == .warningRight
-
-        return HStack {
-            laneIndicator(
-                symbol: "chevron.left.2",
-                title: leftWarning ? "LỆCH TRÁI" : nil,
-                active: laneAvailable,
-                warning: leftWarning
-            )
-
-            Spacer()
-
-            laneIndicator(
-                symbol: "chevron.right.2",
-                title: rightWarning ? "LỆCH PHẢI" : nil,
-                active: laneAvailable,
-                warning: rightWarning
-            )
-        }
-        .frame(width: max(size.width - 54, 1))
-        .position(x: size.width / 2, y: size.height * 0.63)
-    }
-
-    private func laneIndicator(
-        symbol: String,
-        title: String?,
-        active: Bool,
-        warning: Bool
-    ) -> some View {
-        VStack(spacing: 5) {
-            Image(systemName: symbol)
-                .font(.system(size: warning ? 46 : 36, weight: .black))
-            if let title {
-                Text(title)
-                    .font(.caption2.monospaced().bold())
-            }
-        }
-        .foregroundStyle(warning ? Color.red : Color.green.opacity(active ? 0.82 : 0.28))
-        .shadow(color: warning ? .red : .clear, radius: 8)
     }
 
     private func roadGuide(in size: CGSize) -> some View {
