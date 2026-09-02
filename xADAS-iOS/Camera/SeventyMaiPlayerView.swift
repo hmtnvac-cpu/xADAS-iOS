@@ -5,9 +5,7 @@ import VLCKit
 struct SeventyMaiPlayerView: UIViewRepresentable {
     let urlString: String
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
@@ -30,14 +28,11 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
 
         func attach(view: UIView, urlString: String) {
             player.drawable = view
-
             guard currentURL != urlString,
-                  let url = URL(string: urlString) else {
-                return
-            }
+                  let url = URL(string: urlString),
+                  let media = VLCMedia(url: url) else { return }
 
             currentURL = urlString
-            let media = VLCMedia(url: url)
             media.addOption(":rtsp-tcp")
             media.addOption(":network-caching=150")
             media.addOption(":clock-jitter=0")
