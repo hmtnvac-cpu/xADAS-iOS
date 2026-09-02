@@ -1,14 +1,21 @@
 import SwiftUI
 
 struct DriveView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @State private var showCalibration = false
     @State private var showSettings = false
+    @State private var rtspStatus = "70MAI STARTING"
+    @State private var restartToken = UUID()
     @AppStorage(CameraSource.seventyMaiURLKey) private var seventyMaiURL = "rtsp://192.168.0.1:554/00000000"
 
     var body: some View {
         ZStack {
-            SeventyMaiPlayerView(urlString: seventyMaiURL)
-                .ignoresSafeArea()
+            SeventyMaiPlayerView(
+                urlString: seventyMaiURL,
+                restartToken: restartToken,
+                statusText: $rtspStatus
+            )
+            .ignoresSafeArea()
 
             LinearGradient(
                 colors: [.black.opacity(0.24), .clear, .black.opacity(0.34)],
@@ -24,7 +31,10 @@ struct DriveView: View {
                             .font(.title2.bold())
                         Text("70MAI A500S • RTSP")
                             .font(.caption2.monospaced().bold())
-                            .foregroundStyle(.green)
+                            .foregroundStyle(rtspStatus == "70MAI PLAYING" ? .green : .yellow)
+                        Text(rtspStatus)
+                            .font(.caption2.monospaced().bold())
+                            .foregroundStyle(rtspStatus.contains("ERROR") || rtspStatus.contains("FAILED") ? .red : .white.opacity(0.9))
                         Text("VIDEO SOURCE • DASHCAM ONLY")
                             .font(.caption2.monospaced())
                             .foregroundStyle(.white.opacity(0.8))
@@ -33,9 +43,9 @@ struct DriveView: View {
                     Spacer()
 
                     VStack(alignment: .trailing, spacing: 4) {
-                        Text("V0.8")
+                        Text("V0.8.1")
                             .font(.caption.monospaced().bold())
-                        Text("RTSP LIVE")
+                        Text("RTSP /00000000")
                             .font(.caption2.monospaced())
                     }
                 }
@@ -43,6 +53,15 @@ struct DriveView: View {
                 .padding(.top, 12)
 
                 Spacer()
+
+                if rtspStatus != "70MAI PLAYING" {
+                    Button("RETRY 70MAI") {
+                        rtspStatus = "70MAI RETRYING"
+                        restartToken = UUID()
+                    }
+                    .buttonStyle(ADASButtonStyle())
+                    .padding(.bottom, 70)
+                }
             }
             .foregroundStyle(.white)
         }
@@ -60,7 +79,15 @@ struct DriveView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView()
         }
-        .onAppear { CameraSource.registerDefaults() }
+        .onAppear {
+            CameraSource.registerDefaults()
+            restartToken = UUID()
+        }
+        .onChange(of: scenePhase) { phase in
+            if phase == .active {
+                restartToken = UUID()
+            }
+        }
         .persistentSystemOverlays(.hidden)
     }
 }
