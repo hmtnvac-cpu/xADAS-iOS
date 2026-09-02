@@ -105,6 +105,8 @@ jobs:
           shasum -a 256 "$OUT" > "$OUT.sha256"
           echo "DEB_PATH=$OUT" >> "$GITHUB_ENV"
           echo "DEB_SHA_PATH=$OUT.sha256" >> "$GITHUB_ENV"
+          echo "DEB_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "DEB_FILENAME=$(basename "$OUT")" >> "$GITHUB_ENV"
 
       - name: Verify DEB contents
         run: |
@@ -113,7 +115,7 @@ jobs:
           dpkg-deb -c "$DEB_PATH" | tee "$RUNNER_TEMP/deb-contents.txt"
           dpkg-deb -c "$DEB_PATH" | grep -q './var/jb/Applications/xADAS.app/xADAS-iOS'
 
-      - name: Upload Sileo package
+      - name: Upload Sileo package artifact
         uses: actions/upload-artifact@v4
         with:
           name: xADAS-Dev-rootless-deb
@@ -122,6 +124,48 @@ jobs:
             ${{ env.DEB_SHA_PATH }}
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish DEB to xADAS Sileo repo
+        env:
+          SILEO_REPO_TOKEN: ${{ secrets.SILEO_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${SILEO_REPO_TOKEN:-}" ]]; then
+            echo "::notice::SILEO_REPO_TOKEN is not configured. DEB artifact was built, but automatic Sileo publishing was skipped."
+            exit 0
+          fi
+
+          REPO_DIR="$RUNNER_TEMP/xADAS-Sileo-Repo"
+          git clone "https://x-access-token:${SILEO_REPO_TOKEN}@github.com/hmtnvac-cpu/xADAS-Sileo-Repo.git" "$REPO_DIR"
+          cd "$REPO_DIR"
+
+          git config user.name "xADAS Build Bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          mkdir -p debs
+          rm -f debs/xADAS-Dev_*_iphoneos-arm64.deb
+          cp "$DEB_PATH" "debs/$DEB_FILENAME"
+
+          git add debs
+          if git diff --cached --quiet; then
+            echo "No Sileo package change to publish."
+            exit 0
+          fi
+
+          git commit -m "Publish xADAS Dev ${DEB_VERSION}"
+
+          for attempt in 1 2 3; do
+            if git push origin main; then
+              echo "Published $DEB_FILENAME to xADAS-Sileo-Repo/debs"
+              exit 0
+            fi
+            echo "Push attempt $attempt failed; rebasing and retrying..."
+            git pull --rebase origin main
+          done
+
+          echo "Failed to publish Sileo package after 3 attempts" >&2
+          exit 1
 
       - name: Upload build log on failure
         if: failure()
