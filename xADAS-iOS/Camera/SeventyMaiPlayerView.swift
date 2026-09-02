@@ -46,6 +46,14 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
         private var stoppedByOwner = false
         private var consecutiveFailures = 0
 
+        // Rootless jailbreak builds currently crash inside VLCKit's OpenGL ES drawable
+        // (VLCOpenGLES2VideoView.makeCurrent -> assert/abort) as soon as 70mai H.264
+        // frames arrive. Keep libVLC headless on /var/jb so the app remains alive while
+        // we validate RTSP transport. IPA/non-rootless builds keep the existing renderer.
+        private var rootlessSafeMode: Bool {
+            FileManager.default.fileExists(atPath: "/var/jb")
+        }
+
         init(statusText: Binding<String>, frameProcessor: FrameProcessor) {
             self.statusText = statusText
             self.frameProcessor = frameProcessor
@@ -65,7 +73,11 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
 
         func attach(view: UIView, urlString: String, restartToken: UUID) {
             currentView = view
-            player.drawable = view
+            if rootlessSafeMode {
+                player.drawable = nil
+            } else {
+                player.drawable = view
+            }
 
             let needsRestart = currentURL != urlString || currentRestartToken != restartToken
             guard needsRestart else { return }
@@ -81,7 +93,7 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
             reconnectWorkItem?.cancel()
             stopSnapshotLoop()
             player.stop()
-            setStatus("70MAI CONNECTING")
+            setStatus(rootlessSafeMode ? "70MAI CONNECTING • SAFE MODE" : "70MAI CONNECTING")
 
             guard let url = URL(string: urlString),
                   let media = VLCMedia(url: url) else {
@@ -89,14 +101,20 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
                 return
             }
 
-            // Favor stability on the dashcam's local Wi-Fi while keeping latency bounded.
-            // VLC chooses the transport automatically; forcing TCP was less reliable on this A500S.
             media.addOption(":network-caching=700")
             media.addOption(":live-caching=700")
             media.addOption(":clock-jitter=0")
 
+            if rootlessSafeMode {
+                // Do not instantiate VLCKit's iOS OpenGL ES video output on rootless.
+                // The crash log points directly at that renderer. Decode/transport stays
+                // active so we can prove the RTSP session is stable before replacing vout.
+                media.addOption(":no-video-title-show")
+                player.drawable = nil
+            }
+
             player.media = media
-            if let currentView {
+            if !rootlessSafeMode, let currentView {
                 player.drawable = currentView
             }
 
@@ -109,11 +127,16 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
         func mediaPlayerStateChanged(_ newState: VLCMediaPlayerState) {
             switch newState {
             case .opening:
-                setStatus("70MAI OPENING")
+                setStatus(rootlessSafeMode ? "70MAI OPENING • SAFE MODE" : "70MAI OPENING")
             case .playing:
                 consecutiveFailures = 0
-                setStatus("70MAI PLAYING • ADAS ACTIVE")
-                startSnapshotLoop()
+                if rootlessSafeMode {
+                    setStatus("70MAI RTSP OK • SAFE MODE")
+                    stopSnapshotLoop()
+                } else {
+                    setStatus("70MAI PLAYING • ADAS ACTIVE")
+                    startSnapshotLoop()
+                }
             case .paused:
                 setStatus("70MAI PAUSED")
                 stopSnapshotLoop()
@@ -139,7 +162,7 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
         func mediaPlayerBufferingChanged(_ progress: Float) {
             if progress >= 1 {
                 if player.state == .playing {
-                    setStatus("70MAI PLAYING • ADAS ACTIVE")
+                    setStatus(rootlessSafeMode ? "70MAI RTSP OK • SAFE MODE" : "70MAI PLAYING • ADAS ACTIVE")
                 }
             } else {
                 setStatus(String(format: "70MAI BUFFERING %.0f%%", progress * 100))
@@ -163,6 +186,7 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
         }
 
         private func startSnapshotLoop() {
+            guard !rootlessSafeMode else { return }
             guard snapshotTimer == nil else { return }
             snapshotTimer = Timer.scheduledTimer(withTimeInterval: 0.22, repeats: true) { [weak self] _ in
                 self?.requestSnapshot()
@@ -181,6 +205,7 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
         }
 
         private func requestSnapshot() {
+            guard !rootlessSafeMode else { return }
             guard player.state == .playing, !snapshotInFlight else { return }
             snapshotCounter &+= 1
             let path = FileManager.default.temporaryDirectory
@@ -198,6 +223,10 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
         }
 
         @objc private func snapshotTaken(_ notification: Notification) {
+            guard !rootlessSafeMode else {
+                snapshotInFlight = false
+                return
+            }
             guard let path = snapshotPath else {
                 snapshotInFlight = false
                 return
