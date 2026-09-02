@@ -28,12 +28,15 @@ final class FrameProcessor: ObservableObject {
     private var inferenceFrameCounter = 0
     private var laneFrameCounter = 0
     private let inferenceStride = 2
-    private let laneStride = 5
+    private let laneStride = 2
+    private var lastVehicleSeenAt: TimeInterval = 0
+    private var lastLaneSeenAt: TimeInterval = 0
     private let detector: VehicleDetector?
     private let distanceEstimator = DistanceEstimator()
     private let leadDistanceTracker = LeadDistanceTracker()
     private let laneDetector: LaneAIDetector?
     private let laneDepartureMonitor = LaneDepartureMonitor()
+    private var latestLaneDetection: LaneDetection?
 
     init() {
         do {
@@ -79,33 +82,9 @@ final class FrameProcessor: ObservableObject {
             inferenceFrameCounter = 0
             do {
                 let result = try detector.detect(pixelBuffer: pixelBuffer)
-                var measured = result.detections
-
-                if let leadIndex = measured.firstIndex(where: { $0.isLead }) {
-                    let leadBox = measured[leadIndex].boundingBox
-                    let rawDistance = distanceEstimator.estimate(
-                        for: leadBox,
-                        frameWidth: width,
-                        frameHeight: height,
-                        horizontalFieldOfViewDegrees: horizontalFieldOfViewDegrees
-                    )
-                    let tracked = leadDistanceTracker.update(
-                        rawDistance: rawDistance,
-                        leadBox: leadBox,
-                        timestamp: timestamp
-                    )
-                    measured[leadIndex] = measured[leadIndex].withDistance(tracked.distanceMeters)
-                    newLeadState = tracked
-                } else {
-                    leadDistanceTracker.reset()
-                    newLeadState = LeadDistanceState(
-                        distanceMeters: nil,
-                        closingSpeedMetersPerSecond: nil,
-                        risk: .unavailable
-                    )
-                }
-
-                newDetections = measured
+                // Lead selection happens after lane inference.  The detector
+                // must never choose a vehicle in the opposite/adjacent lane.
+                newDetections = result.detections.map { $0.markingLead(false) }
                 newInferenceMS = result.inferenceMS
             } catch {
                 let message = error.localizedDescription
@@ -120,8 +99,18 @@ final class FrameProcessor: ObservableObject {
             laneWasEvaluated = true
             do {
                 let lane = try laneDetector.detect(pixelBuffer: pixelBuffer)
-                newLaneDetection = lane
-                newLaneState = laneDepartureMonitor.update(with: lane)
+                if let lane {
+                    lastLaneSeenAt = ProcessInfo.processInfo.systemUptime
+                    latestLaneDetection = lane
+                    newLaneDetection = lane
+                    newLaneState = laneDepartureMonitor.update(with: lane)
+                } else if ProcessInfo.processInfo.systemUptime - lastLaneSeenAt > 0.7 {
+                    latestLaneDetection = nil
+                    newLaneDetection = nil
+                    newLaneState = laneDepartureMonitor.update(with: nil)
+                } else {
+                    laneWasEvaluated = false
+                }
             } catch {
                 newLaneDetection = nil
                 newLaneState = laneDepartureMonitor.update(with: nil)
@@ -130,6 +119,37 @@ final class FrameProcessor: ObservableObject {
                     self?.laneStatus = "LANE MODEL ERROR: \(message)"
                 }
             }
+        }
+
+        if var measured = newDetections {
+            if let lane = latestLaneDetection,
+               let leadIndex = leadVehicleIndex(in: measured, lane: lane) {
+                let leadBox = measured[leadIndex].boundingBox
+                let rawDistance = distanceEstimator.estimate(
+                    for: leadBox,
+                    frameWidth: width,
+                    frameHeight: height,
+                    horizontalFieldOfViewDegrees: horizontalFieldOfViewDegrees
+                )
+                let tracked = leadDistanceTracker.update(
+                    rawDistance: rawDistance,
+                    leadBox: leadBox,
+                    timestamp: timestamp
+                )
+                measured[leadIndex] = measured[leadIndex]
+                    .markingLead(true)
+                    .withDistance(tracked.distanceMeters)
+                newLeadState = tracked
+                lastVehicleSeenAt = ProcessInfo.processInfo.systemUptime
+            } else if ProcessInfo.processInfo.systemUptime - lastVehicleSeenAt > 0.8 {
+                leadDistanceTracker.reset()
+                newLeadState = LeadDistanceState(
+                    distanceMeters: nil,
+                    closingSpeedMetersPerSecond: nil,
+                    risk: .unavailable
+                )
+            }
+            newDetections = measured
         }
 
         let now = ProcessInfo.processInfo.systemUptime
@@ -185,5 +205,45 @@ final class FrameProcessor: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Select only a vehicle whose road-contact point is inside the two
+    /// detected ego-lane boundaries.  No lane means no distance warning.
+    private func leadVehicleIndex(
+        in detections: [VehicleDetection],
+        lane: LaneDetection
+    ) -> Int? {
+        let candidates = detections.indices.filter { index in
+            let box = detections[index].boundingBox
+            let contactY = 1.0 - Double(box.minY)
+            guard let leftX = fittedLaneX(lane.leftPoints, at: contactY),
+                  let rightX = fittedLaneX(lane.rightPoints, at: contactY),
+                  rightX > leftX else { return false }
+            let contactX = Double(box.midX)
+            return contactX >= leftX && contactX <= rightX
+        }
+
+        return candidates.max { lhs, rhs in
+            let a = detections[lhs].boundingBox
+            let b = detections[rhs].boundingBox
+            let aScore = (1.0 - Double(a.minY)) + Double(a.width * a.height)
+            let bScore = (1.0 - Double(b.minY)) + Double(b.width * b.height)
+            return aScore < bScore
+        }
+    }
+
+    private func fittedLaneX(_ points: [CGPoint], at y: Double) -> Double? {
+        guard points.count >= 6 else { return nil }
+        let count = Double(points.count)
+        let sumY = points.reduce(0.0) { $0 + Double($1.y) }
+        let sumX = points.reduce(0.0) { $0 + Double($1.x) }
+        let sumYY = points.reduce(0.0) { $0 + Double($1.y * $1.y) }
+        let sumYX = points.reduce(0.0) { $0 + Double($1.y * $1.x) }
+        let denominator = count * sumYY - sumY * sumY
+        guard abs(denominator) > 0.000_001 else { return nil }
+        let slope = (count * sumYX - sumY * sumX) / denominator
+        let intercept = (sumX - slope * sumY) / count
+        let x = slope * y + intercept
+        return x.isFinite ? x : nil
     }
 }
