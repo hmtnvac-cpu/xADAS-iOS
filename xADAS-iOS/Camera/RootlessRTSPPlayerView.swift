@@ -101,6 +101,11 @@ final class RootlessRTSPPlayerView: UIView {
     }
 }
 
+private enum RTSPTransportMode {
+    case udp
+    case tcp
+}
+
 private final class RTSPH264Client {
     private let url: URL
     private let queue = DispatchQueue(label: "xadas.rtsp.native")
@@ -118,6 +123,8 @@ private final class RTSPH264Client {
     private var setupTarget: String?
     private var stopped = false
     private var receivedFirstRTP = false
+    private var transportMode: RTSPTransportMode = .udp
+    private var rtpWatchdog: DispatchWorkItem?
     private let rtpPort = NWEndpoint.Port(rawValue: 50_000)!
     private let rtcpPort = NWEndpoint.Port(rawValue: 50_001)!
 
@@ -141,19 +148,26 @@ private final class RTSPH264Client {
 
     func start() {
         stopped = false
-        guard let hostName = url.host,
+        transportMode = .udp
+        connectRTSP()
+    }
+
+    private func connectRTSP() {
+        guard !stopped,
+              let hostName = url.host,
               let port = NWEndpoint.Port(rawValue: UInt16(url.port ?? 554)) else {
             report("70MAI URL INVALID")
             return
         }
 
+        resetNetworkState()
         let connection = NWConnection(host: .init(hostName), port: port, using: .tcp)
         self.connection = connection
         connection.stateUpdateHandler = { [weak self] state in
             guard let self, !self.stopped else { return }
             switch state {
             case .ready:
-                self.report("70MAI RTSP CONNECTED")
+                self.report("70MAI RTSP CONNECTED • \(self.transportMode == .udp ? "UDP" : "TCP")")
                 self.receiveLoop()
                 self.describe()
             case .failed(let error):
@@ -167,8 +181,36 @@ private final class RTSPH264Client {
         connection.start(queue: queue)
     }
 
+    private func resetNetworkState() {
+        rtpWatchdog?.cancel()
+        rtpWatchdog = nil
+        connection?.cancel()
+        connection = nil
+        udpRTPConnection?.cancel()
+        udpRTPConnection = nil
+        receiveBuffer.removeAll()
+        pendingResponse = nil
+        sessionID = nil
+        playTarget = nil
+        setupTarget = nil
+        cseq = 1
+        receivedFirstRTP = false
+        currentTimestamp = nil
+        accessUnit.removeAll()
+        fragmentedNAL = nil
+    }
+
+    private func retryUsingTCP() {
+        guard !stopped, transportMode == .udp else { return }
+        report("70MAI UDP NO RTP • TRYING TCP")
+        transportMode = .tcp
+        connectRTSP()
+    }
+
     func stop() {
         stopped = true
+        rtpWatchdog?.cancel()
+        rtpWatchdog = nil
         connection?.cancel()
         connection = nil
         udpRTPConnection?.cancel()
@@ -266,10 +308,13 @@ private final class RTSPH264Client {
     }
 
     private func setup(trackURL: String) {
+        let transport = transportMode == .udp
+            ? "RTP/AVP;unicast;client_port=\(rtpPort.rawValue)-\(rtcpPort.rawValue)"
+            : "RTP/AVP/TCP;unicast;interleaved=0-1"
         sendRequest(
             method: "SETUP",
             target: trackURL,
-            headers: ["Transport": "RTP/AVP;unicast;client_port=\(rtpPort.rawValue)-\(rtcpPort.rawValue)"]
+            headers: ["Transport": transport]
         ) { [weak self] code, headers, _ in
             guard let self else { return }
             guard code == 200 else {
@@ -280,8 +325,14 @@ private final class RTSPH264Client {
                 self.sessionID = raw.split(separator: ";", maxSplits: 1).first.map(String.init)
             }
             let negotiated = headers["transport"] ?? ""
+            if self.transportMode == .tcp {
+                self.report("70MAI SETUP OK • TCP")
+                self.play()
+                return
+            }
             guard let serverPort = self.serverRTPPort(from: negotiated) else {
-                self.report("70MAI UDP PORT MISSING")
+                self.report("70MAI UDP PORT MISSING • TRYING TCP")
+                self.retryUsingTCP()
                 return
             }
             self.report("70MAI SETUP OK • UDP")
@@ -311,7 +362,8 @@ private final class RTSPH264Client {
         sendRequest(method: "PLAY", target: target, headers: headers) { [weak self] code, _, _ in
             guard let self else { return }
             if code == 200 {
-                self.report("70MAI PLAYING • NATIVE RTSP")
+                self.report("70MAI PLAYING • WAITING RTP • \(self.transportMode == .udp ? "UDP" : "TCP")")
+                self.startRTPWatchdog()
                 return
             }
 
@@ -327,6 +379,20 @@ private final class RTSPH264Client {
             }
             self.report("70MAI PLAY FAILED • \(code)")
         }
+    }
+
+    private func startRTPWatchdog() {
+        rtpWatchdog?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, !self.stopped, !self.receivedFirstRTP else { return }
+            if self.transportMode == .udp {
+                self.retryUsingTCP()
+            } else {
+                self.report("70MAI NO RTP • TCP")
+            }
+        }
+        rtpWatchdog = item
+        queue.asyncAfter(deadline: .now() + 4.0, execute: item)
     }
 
     private func sendRequest(
@@ -461,6 +527,12 @@ private final class RTSPH264Client {
 
     private func consumeRTP(_ packet: Data) {
         guard packet.count >= 12 else { return }
+        if !receivedFirstRTP {
+            receivedFirstRTP = true
+            rtpWatchdog?.cancel()
+            rtpWatchdog = nil
+            report("70MAI RTP RECEIVING • \(transportMode == .udp ? "UDP" : "TCP")")
+        }
         let first = packet[0]
         let second = packet[1]
         let cc = Int(first & 0x0F)
