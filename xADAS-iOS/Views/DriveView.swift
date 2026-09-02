@@ -6,56 +6,57 @@ struct DriveView: View {
     @State private var showSettings = false
     @State private var rtspStatus = "70MAI STARTING"
     @State private var restartToken = UUID()
+    @StateObject private var frameProcessor = FrameProcessor()
 
     private let seventyMaiURL = CameraSource.seventyMaiURL
+    private let warningManager = ADASWarningManager()
 
     var body: some View {
         ZStack {
             SeventyMaiPlayerView(
                 urlString: seventyMaiURL,
                 restartToken: restartToken,
+                frameProcessor: frameProcessor,
                 statusText: $rtspStatus
             )
             .ignoresSafeArea()
 
-            LinearGradient(
-                colors: [.black.opacity(0.24), .clear, .black.opacity(0.34)],
-                startPoint: .top,
-                endPoint: .bottom
+            ADASOverlayView(
+                isCameraRunning: rtspStatus.contains("PLAYING"),
+                fps: rtspStatus.contains("PLAYING") ? 4.5 : 0,
+                pipelineStatus: frameProcessor.pipelineStatus,
+                detectorStatus: frameProcessor.detectorStatus,
+                inferenceMS: frameProcessor.inferenceMS,
+                frameWidth: frameProcessor.frameWidth,
+                frameHeight: frameProcessor.frameHeight,
+                detections: frameProcessor.detections,
+                leadDistanceState: frameProcessor.leadDistanceState,
+                horizonRatio: UserDefaults.standard.double(forKey: DistanceEstimator.horizonRatioKey),
+                laneDetection: frameProcessor.laneDetection,
+                laneStatus: frameProcessor.laneStatus,
+                laneDepartureState: frameProcessor.laneDepartureState
             )
-            .ignoresSafeArea()
 
             VStack {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("xADAS")
-                            .font(.title2.bold())
-                        Text("70MAI A500S • RTSP")
-                            .font(.caption2.monospaced().bold())
-                            .foregroundStyle(rtspStatus == "70MAI PLAYING" ? .green : .yellow)
-                        Text(rtspStatus)
-                            .font(.caption2.monospaced().bold())
-                            .foregroundStyle(rtspStatus.contains("ERROR") || rtspStatus.contains("FAILED") ? .red : .white.opacity(0.9))
-                        Text("70MAI ONLY • NO IPHONE CAMERA")
+                HStack {
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 3) {
+                        Text("V0.9.0")
+                            .font(.caption.monospaced().bold())
+                        Text("70MAI • RTSP • ADAS")
                             .font(.caption2.monospaced().bold())
                             .foregroundStyle(.cyan)
-                    }
-
-                    Spacer()
-
-                    VStack(alignment: .trailing, spacing: 4) {
-                        Text("V0.8.2")
-                            .font(.caption.monospaced().bold())
-                        Text("192.168.0.1/00000000")
+                        Text(rtspStatus)
                             .font(.caption2.monospaced())
+                            .foregroundStyle(rtspStatus.contains("ERROR") ? .red : .white.opacity(0.85))
                     }
+                    .padding(.trailing, 20)
+                    .padding(.top, 12)
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 12)
 
                 Spacer()
 
-                if rtspStatus != "70MAI PLAYING" {
+                if !rtspStatus.contains("PLAYING") {
                     Button("RETRY 70MAI") {
                         rtspStatus = "70MAI RETRYING"
                         restartToken = UUID()
@@ -81,12 +82,19 @@ struct DriveView: View {
             SettingsView()
         }
         .onAppear {
+            frameProcessor.horizontalFieldOfViewDegrees = 140
             restartToken = UUID()
         }
         .onChange(of: scenePhase) { phase in
             if phase == .active {
                 restartToken = UUID()
             }
+        }
+        .onChange(of: frameProcessor.leadDistanceState) { newValue in
+            warningManager.update(distance: newValue, lane: frameProcessor.laneDepartureState)
+        }
+        .onChange(of: frameProcessor.laneDepartureState) { newValue in
+            warningManager.update(distance: frameProcessor.leadDistanceState, lane: newValue)
         }
         .persistentSystemOverlays(.hidden)
     }
