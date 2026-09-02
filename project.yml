@@ -22,11 +22,7 @@ targets:
     info:
       path: xADAS-iOS/Info.plist
       properties:
-        CFBundleDisplayName: "xADAS Dev"
-        CFBundleName: "xADAS Dev"
-        CFBundleShortVersionString: "0.9.0"
-        CFBundleVersion: "9001"
-        NSCameraUsageDescription: "xADAS uses video for real-time driver-assistance vision processing."
+        NSCameraUsageDescription: "xADAS uses the rear camera for real-time driver-assistance vision processing."
         NSLocalNetworkUsageDescription: "xADAS connects directly to your 70mai dashcam on its local Wi-Fi network to receive the RTSP video stream."
         UIRequiresFullScreen: true
         UISupportedInterfaceOrientations:
@@ -34,7 +30,7 @@ targets:
           - UIInterfaceOrientationLandscapeRight
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.hmtnvac.xadas.dev
+        PRODUCT_BUNDLE_IDENTIFIER: com.hmtnvac.xadas
         TARGETED_DEVICE_FAMILY: "1"
         INFOPLIST_FILE: xADAS-iOS/Info.plist
         GENERATE_INFOPLIST_FILE: NO
