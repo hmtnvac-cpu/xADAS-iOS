@@ -24,7 +24,7 @@ struct DriveView: View {
             ADASOverlayView(
                 isCameraRunning: frameProcessor.frameWidth > 0 && frameProcessor.frameHeight > 0,
                 fps: rtspStatus.contains("PLAYING") ? 4.5 : 0,
-                pipelineStatus: frameProcessor.pipelineStatus,
+                pipelineStatus: rtspStatus,
                 detectorStatus: frameProcessor.detectorStatus,
                 inferenceMS: frameProcessor.inferenceMS,
                 frameWidth: frameProcessor.frameWidth,
