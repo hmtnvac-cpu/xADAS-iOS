@@ -166,10 +166,10 @@ struct ADASOverlayView: View {
             let leftColor: Color = leftWarning ? .red : .cyan
             let rightColor: Color = rightWarning ? .red : .cyan
 
-            context.stroke(left, with: .color(leftColor.opacity(0.30)), lineWidth: leftWarning ? 13 : 9)
-            context.stroke(right, with: .color(rightColor.opacity(0.30)), lineWidth: rightWarning ? 13 : 9)
-            context.stroke(left, with: .color(leftColor), lineWidth: leftWarning ? 7 : 4)
-            context.stroke(right, with: .color(rightColor), lineWidth: rightWarning ? 7 : 4)
+            context.stroke(left, with: .color(leftColor.opacity(0.24)), lineWidth: leftWarning ? 9 : 6)
+            context.stroke(right, with: .color(rightColor.opacity(0.24)), lineWidth: rightWarning ? 9 : 6)
+            context.stroke(left, with: .color(leftColor), lineWidth: leftWarning ? 5 : 3)
+            context.stroke(right, with: .color(rightColor), lineWidth: rightWarning ? 5 : 3)
         }
     }
 
