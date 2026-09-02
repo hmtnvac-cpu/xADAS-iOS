@@ -25,6 +25,11 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Install XcodeGen
         run: brew install xcodegen
 
