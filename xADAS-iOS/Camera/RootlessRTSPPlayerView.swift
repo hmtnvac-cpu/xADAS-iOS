@@ -113,6 +113,8 @@ private final class RTSPH264Client {
     private var cseq = 1
     private var pendingResponse: ((Int, [String: String], Data) -> Void)?
     private var sessionID: String?
+    private var playTarget: String?
+    private var setupTarget: String?
     private var stopped = false
 
     private var currentTimestamp: UInt32?
@@ -168,6 +170,8 @@ private final class RTSPH264Client {
         receiveBuffer.removeAll()
         pendingResponse = nil
         sessionID = nil
+        playTarget = nil
+        setupTarget = nil
         currentTimestamp = nil
         accessUnit.removeAll()
         fragmentedNAL = nil
@@ -176,17 +180,30 @@ private final class RTSPH264Client {
     }
 
     private func describe() {
-        sendRequest(method: "DESCRIBE", target: url.absoluteString, headers: ["Accept": "application/sdp"]) { [weak self] code, _, body in
+        sendRequest(method: "DESCRIBE", target: url.absoluteString, headers: ["Accept": "application/sdp"]) { [weak self] code, headers, body in
             guard let self else { return }
             guard code == 200 else {
                 self.report("70MAI DESCRIBE FAILED • \(code)")
                 return
             }
-            guard let sdp = String(data: body, encoding: .utf8),
-                  let trackURL = self.videoTrackURL(from: sdp) else {
+            guard let sdp = String(data: body, encoding: .utf8) else {
+                self.report("70MAI SDP INVALID")
+                return
+            }
+
+            // 70mai/live555 returns the aggregate control URI in Content-Base.
+            // PLAY must use that URI (usually with a trailing slash), not the
+            // original DESCRIBE URI. VLC does this automatically.
+            let contentBase = headers["content-base"]
+                ?? headers["content-location"]
+                ?? self.directoryURL(self.url.absoluteString)
+            guard let trackURL = self.videoTrackURL(from: sdp, baseURL: contentBase) else {
                 self.report("70MAI SDP VIDEO NOT FOUND")
                 return
             }
+
+            self.playTarget = self.presentationURL(from: sdp, baseURL: contentBase)
+            self.setupTarget = trackURL
             self.readSDPParameterSets(sdp)
             self.setup(trackURL: trackURL)
         }
@@ -211,15 +228,32 @@ private final class RTSPH264Client {
     }
 
     private func play() {
-        var headers: [String: String] = [:]
+        let target = playTarget ?? directoryURL(url.absoluteString)
+        sendPlay(target: target, allowTrackFallback: true)
+    }
+
+    private func sendPlay(target: String, allowTrackFallback: Bool) {
+        var headers = ["Range": "npt=0.000-"]
         if let sessionID { headers["Session"] = sessionID }
-        sendRequest(method: "PLAY", target: url.absoluteString, headers: headers) { [weak self] code, _, _ in
+
+        sendRequest(method: "PLAY", target: target, headers: headers) { [weak self] code, _, _ in
             guard let self else { return }
-            guard code == 200 else {
-                self.report("70MAI PLAY FAILED • \(code)")
+            if code == 200 {
+                self.report("70MAI PLAYING • NATIVE RTSP")
                 return
             }
-            self.report("70MAI PLAYING • NATIVE RTSP")
+
+            // Some 70mai firmware accepts aggregate PLAY; other builds only
+            // accept PLAY on the exact video track URI returned by SDP.
+            if code == 404,
+               allowTrackFallback,
+               let setupTarget = self.setupTarget,
+               setupTarget != target {
+                self.report("70MAI PLAY RETRY • TRACK URI")
+                self.sendPlay(target: setupTarget, allowTrackFallback: false)
+                return
+            }
+            self.report("70MAI PLAY FAILED • \(code)")
         }
     }
 
@@ -306,18 +340,38 @@ private final class RTSPH264Client {
         return result
     }
 
-    private func videoTrackURL(from sdp: String) -> String? {
+    private func videoTrackURL(from sdp: String, baseURL: String) -> String? {
         var inVideo = false
         for raw in sdp.components(separatedBy: .newlines) {
             let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if line.hasPrefix("m=") { inVideo = line.hasPrefix("m=video") }
             guard inVideo, line.hasPrefix("a=control:") else { continue }
             let control = String(line.dropFirst("a=control:".count))
-            if control.lowercased().hasPrefix("rtsp://") { return control }
-            let base = url.absoluteString.hasSuffix("/") ? url.absoluteString : url.absoluteString + "/"
-            return URL(string: control, relativeTo: URL(string: base))?.absoluteString ?? base + control
+            return resolveControlURL(control, baseURL: baseURL)
         }
         return nil
+    }
+
+    private func presentationURL(from sdp: String, baseURL: String) -> String {
+        for raw in sdp.components(separatedBy: .newlines) {
+            let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.hasPrefix("m=") { break }
+            guard line.hasPrefix("a=control:") else { continue }
+            let control = String(line.dropFirst("a=control:".count))
+            if control == "*" { return directoryURL(baseURL) }
+            return resolveControlURL(control, baseURL: baseURL)
+        }
+        return directoryURL(baseURL)
+    }
+
+    private func resolveControlURL(_ control: String, baseURL: String) -> String {
+        if control.lowercased().hasPrefix("rtsp://") { return control }
+        let base = directoryURL(baseURL)
+        return URL(string: control, relativeTo: URL(string: base))?.absoluteString ?? base + control
+    }
+
+    private func directoryURL(_ value: String) -> String {
+        value.hasSuffix("/") ? value : value + "/"
     }
 
     private func readSDPParameterSets(_ sdp: String) {
