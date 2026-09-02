@@ -83,9 +83,7 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
                 guard let self else { return }
-                if !self.player.play() {
-                    self.setStatus("70MAI PLAY FAILED")
-                }
+                self.player.play()
             }
         }
 
