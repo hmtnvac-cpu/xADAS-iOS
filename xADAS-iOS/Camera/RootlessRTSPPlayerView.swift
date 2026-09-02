@@ -200,6 +200,7 @@ private final class RTSPH264Client {
         fragmentedNAL = nil
     }
 
+    // 70mai firmware varies by transport; fall back without user intervention.
     private func retryUsingTCP() {
         guard !stopped, transportMode == .udp else { return }
         report("70MAI UDP NO RTP • TRYING TCP")
