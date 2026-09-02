@@ -1,4 +1,4 @@
-name: Build iOS IPA
+name: Build xADAS Rootless DEB
 
 on:
   workflow_dispatch:
@@ -8,6 +8,7 @@ on:
       - "xADAS-iOS/**"
       - "project.yml"
       - "scripts/download-model.sh"
+      - "scripts/package-rootless-deb.sh"
       - ".github/workflows/build-ios.yml"
 
 jobs:
@@ -22,8 +23,9 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Install build tools
+        run: |
+          brew install xcodegen dpkg ldid
 
       - name: Download Core ML model
         run: bash scripts/download-model.sh
@@ -31,7 +33,7 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Verify deployment target before build
+      - name: Verify deployment target
         run: |
           set -euo pipefail
           SETTINGS=$(xcodebuild \
@@ -44,7 +46,7 @@ jobs:
           echo "IPHONEOS_DEPLOYMENT_TARGET=$TARGET"
           test "$TARGET" = "16.0"
 
-      - name: Build unsigned device app
+      - name: Build device app
         run: |
           set -o pipefail
           xcodebuild \
@@ -59,7 +61,7 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             build | tee "$RUNNER_TEMP/xcodebuild.log"
 
-      - name: Preflight built app bundle
+      - name: Preflight app bundle
         run: |
           set -euo pipefail
           APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/xADAS-iOS.app"
@@ -69,34 +71,55 @@ jobs:
           test -f "$INFO"
           test -f "$BIN"
           test -d "$APP_PATH/YOLOv3TinyInt8LUT.mlmodelc"
-          CAMERA_USAGE=$(/usr/libexec/PlistBuddy -c 'Print :NSCameraUsageDescription' "$INFO")
-          LOCAL_NETWORK_USAGE=$(/usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' "$INFO")
+          BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INFO")
+          DISPLAY_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$INFO")
           MIN_OS=$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$INFO")
-          echo "Camera usage: $CAMERA_USAGE"
-          echo "Local network usage: $LOCAL_NETWORK_USAGE"
+          LOCAL_NETWORK_USAGE=$(/usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' "$INFO")
+          echo "Bundle ID: $BUNDLE_ID"
+          echo "Display name: $DISPLAY_NAME"
           echo "Minimum OS: $MIN_OS"
-          test -n "$CAMERA_USAGE"
-          test -n "$LOCAL_NETWORK_USAGE"
+          test "$BUNDLE_ID" = "com.hmtnvac.xadas.dev"
+          test "$DISPLAY_NAME" = "xADAS Dev"
           test "$MIN_OS" = "16.0"
-          xcrun vtool -show-build "$BIN"
+          test -n "$LOCAL_NETWORK_USAGE"
 
-      - name: Package unsigned IPA
+      - name: Ad-hoc sign rootless app
         run: |
           set -euo pipefail
           APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/xADAS-iOS.app"
-          mkdir -p "$RUNNER_TEMP/Payload"
-          cp -R "$APP_PATH" "$RUNNER_TEMP/Payload/"
-          cd "$RUNNER_TEMP"
-          /usr/bin/zip -qry xADAS-iOS-V0.9.0-unsigned.ipa Payload
-          shasum -a 256 xADAS-iOS-V0.9.0-unsigned.ipa > xADAS-iOS-V0.9.0-unsigned.sha256
+          while IFS= read -r -d '' FILE; do
+            if file "$FILE" | grep -q 'Mach-O'; then
+              echo "ldid signing: $FILE"
+              ldid -S "$FILE"
+            fi
+          done < <(find "$APP_PATH" -type f -print0)
+          ldid -e "$APP_PATH/xADAS-iOS" >/dev/null
 
-      - name: Upload IPA
+      - name: Package rootless Sileo DEB
+        run: |
+          set -euo pipefail
+          APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/xADAS-iOS.app"
+          VERSION="0.9.0~dev${GITHUB_RUN_NUMBER}"
+          OUT="$RUNNER_TEMP/xADAS-Dev_${VERSION}_iphoneos-arm64.deb"
+          bash scripts/package-rootless-deb.sh "$APP_PATH" "$OUT" "$VERSION"
+          shasum -a 256 "$OUT" > "$OUT.sha256"
+          echo "DEB_PATH=$OUT" >> "$GITHUB_ENV"
+          echo "DEB_SHA_PATH=$OUT.sha256" >> "$GITHUB_ENV"
+
+      - name: Verify DEB contents
+        run: |
+          set -euo pipefail
+          dpkg-deb -I "$DEB_PATH"
+          dpkg-deb -c "$DEB_PATH" | tee "$RUNNER_TEMP/deb-contents.txt"
+          dpkg-deb -c "$DEB_PATH" | grep -q './var/jb/Applications/xADAS.app/xADAS-iOS'
+
+      - name: Upload Sileo package
         uses: actions/upload-artifact@v4
         with:
-          name: xADAS-iOS-V0.9.0-unsigned
+          name: xADAS-Dev-rootless-deb
           path: |
-            ${{ runner.temp }}/xADAS-iOS-V0.9.0-unsigned.ipa
-            ${{ runner.temp }}/xADAS-iOS-V0.9.0-unsigned.sha256
+            ${{ env.DEB_PATH }}
+            ${{ env.DEB_SHA_PATH }}
           if-no-files-found: error
           retention-days: 14
 
@@ -104,7 +127,9 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: xcodebuild-log
-          path: ${{ runner.temp }}/xcodebuild.log
+          name: xadas-rootless-build-log
+          path: |
+            ${{ runner.temp }}/xcodebuild.log
+            ${{ runner.temp }}/deb-contents.txt
           if-no-files-found: ignore
           retention-days: 7
