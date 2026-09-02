@@ -21,38 +21,19 @@ struct ADASOverlayView: View {
             ZStack {
                 VStack {
                     HStack(alignment: .top) {
-                        VStack(alignment: .leading, spacing: 4) {
+                        VStack(alignment: .leading, spacing: 3) {
                             Text("xADAS")
-                                .font(.title2.bold())
-                            Text(isCameraRunning ? "70MAI ONLINE" : "70MAI STARTING")
-                                .font(.caption2.monospaced().bold())
-                                .foregroundStyle(isCameraRunning ? .green : .yellow)
-                            Text(pipelineStatus)
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(.white.opacity(0.8))
-                            Text(detectorStatus)
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(.white.opacity(0.8))
-                            Text(laneStatus)
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(laneDetection == nil ? .yellow : .cyan)
+                                .font(.headline.bold())
+                            HStack(spacing: 5) {
+                                Circle()
+                                    .fill(isCameraRunning ? .green : .yellow)
+                                    .frame(width: 7, height: 7)
+                                Text(isCameraRunning ? "70MAI" : "CONNECTING")
+                                    .font(.caption2.monospaced().bold())
+                            }
                         }
 
                         Spacer()
-
-                        VStack(alignment: .trailing, spacing: 4) {
-                            Text("V0.9.0")
-                                .font(.caption.monospaced().bold())
-                            Text(String(format: "AI FPS %.1f", fps))
-                                .font(.caption2.monospaced())
-                            Text(String(format: "AI %.1f ms", inferenceMS))
-                                .font(.caption2.monospaced())
-                            if frameWidth > 0 && frameHeight > 0 {
-                                Text("\(frameWidth)×\(frameHeight)")
-                                    .font(.caption2.monospaced())
-                                    .foregroundStyle(.white.opacity(0.75))
-                            }
-                        }
                     }
                     .padding(.horizontal, 20)
                     .padding(.top, 12)
@@ -61,12 +42,6 @@ struct ADASOverlayView: View {
                         VStack(spacing: 3) {
                             Text(String(format: "%.1f m", distance))
                                 .font(.system(size: 36, weight: .bold, design: .rounded))
-                            Text(leadDistanceState.risk.displayText)
-                                .font(.caption.monospaced().bold())
-                            if let closing = leadDistanceState.closingSpeedMetersPerSecond {
-                                Text(String(format: closing >= 0 ? "CLOSING %.1f m/s" : "OPENING %.1f m/s", abs(closing)))
-                                    .font(.caption2.monospaced())
-                            }
                         }
                         .foregroundStyle(.white)
                         .padding(.horizontal, 16)
@@ -121,13 +96,15 @@ struct ADASOverlayView: View {
             RoundedRectangle(cornerRadius: 5)
                 .stroke(color, lineWidth: detection.isLead ? 4 : 2)
 
-            Text(labelText(for: detection))
-                .font(.caption2.monospaced().bold())
-                .foregroundStyle(.black)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 3)
-                .background(color)
-                .offset(y: -22)
+            if detection.isLead, let distance = detection.distanceMeters {
+                Text(String(format: "%.1f m", distance))
+                    .font(.caption2.monospaced().bold())
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 3)
+                    .background(color)
+                    .offset(y: -22)
+            }
         }
         .frame(width: max(rect.width, 1), height: max(rect.height, 1))
         .position(x: rect.midX, y: rect.midY)
