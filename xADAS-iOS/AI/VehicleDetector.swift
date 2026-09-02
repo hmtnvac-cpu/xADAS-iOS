@@ -29,6 +29,7 @@ final class VehicleDetector {
     ]
     private let request: VNCoreMLRequest
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
+    private var detectionPass: UInt64 = 0
 
     init() throws {
         guard let compiledURL = Bundle.main.url(
@@ -58,7 +59,11 @@ final class VehicleDetector {
         orientation: CGImagePropertyOrientation = .up
     ) throws -> (detections: [VehicleDetection], inferenceMS: Double) {
         let started = CFAbsoluteTimeGetCurrent()
-        let prepared = makeLeadVehicleCrop(from: pixelBuffer)
+        detectionPass &+= 1
+        let prepared = makeLeadVehicleCrop(
+            from: pixelBuffer,
+            useFullWidth: detectionPass.isMultiple(of: 3)
+        )
         let handler = VNImageRequestHandler(
             cvPixelBuffer: prepared.pixelBuffer,
             orientation: orientation,
@@ -73,7 +78,7 @@ final class VehicleDetector {
 
         var vehicles = recognizedObjects.compactMap { observation -> VehicleDetection? in
             guard let best = observation.labels.first,
-                  best.confidence >= 0.18,
+                  best.confidence >= 0.10,
                   vehicleLabels.contains(best.identifier.lowercased()) else {
                 return nil
             }
@@ -135,7 +140,7 @@ final class VehicleDetector {
             var bestClass: (label: String, confidence: Double)?
             for vehicleClass in vehicleClassIndexes where vehicleClass.index < classCount {
                 let score = value(confidence, row, vehicleClass.index)
-                if score >= 0.18, score > (bestClass?.confidence ?? 0) {
+                if score >= 0.10, score > (bestClass?.confidence ?? 0) {
                     bestClass = (vehicleClass.label, score)
                 }
             }
@@ -197,7 +202,8 @@ final class VehicleDetector {
     }
 
     private func makeLeadVehicleCrop(
-        from pixelBuffer: CVPixelBuffer
+        from pixelBuffer: CVPixelBuffer,
+        useFullWidth: Bool
     ) -> (pixelBuffer: CVPixelBuffer, roi: CGRect) {
         let sourceWidth = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
         let sourceHeight = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
@@ -209,12 +215,12 @@ final class VehicleDetector {
         let savedCenter = defaults.double(forKey: DistanceEstimator.cameraCenterXKey)
         let savedWidth = defaults.double(forKey: DistanceEstimator.vehicleROIWidthKey)
         let center = CGFloat(savedCenter > 0.1 ? savedCenter : 0.5)
-        let width = CGFloat(min(max(savedWidth, 0.42), 0.76))
+        let width = useFullWidth ? CGFloat(1.0) : CGFloat(min(max(savedWidth, 0.42), 0.76))
         let roi = CGRect(
-            x: min(max(center - width / 2, 0), 1 - width),
-            y: 0.08,
+            x: useFullWidth ? 0 : min(max(center - width / 2, 0), 1 - width),
+            y: useFullWidth ? 0 : 0.08,
             width: width,
-            height: 0.78
+            height: useFullWidth ? 1 : 0.78
         )
 
         let outputWidth = 640

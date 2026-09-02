@@ -98,8 +98,8 @@ final class LaneAIDetector {
 
         guard let left = decodeLane(index: 1, locRow: locRow, existRow: existRow),
               let right = decodeLane(index: 2, locRow: locRow, existRow: existRow),
-              left.points.count >= 18,
-              right.points.count >= 18 else {
+              left.points.count >= 14,
+              right.points.count >= 14 else {
             return nil
         }
 
@@ -113,7 +113,7 @@ final class LaneAIDetector {
         guard laneWidth >= 0.18, laneWidth <= 0.78 else { return nil }
 
         let confidence = min(left.confidence, right.confidence)
-        guard confidence >= 0.52 else { return nil }
+        guard confidence >= 0.38 else { return nil }
 
         let laneCenter = (leftX + rightX) / 2
         let savedCenter = UserDefaults.standard.double(
@@ -213,8 +213,12 @@ final class LaneAIDetector {
         for row in 0..<Self.rowCount {
             let absent = existRow[existIndex(classIndex: 0, row: row, lane: lane)]
             let present = existRow[existIndex(classIndex: 1, row: row, lane: lane)]
+            // Match UFLD V2's reference decoder: class 1 wins when the
+            // model says that this row anchor contains a lane point.  A
+            // second arbitrary probability threshold was discarding valid
+            // points on real 70mai frames.
+            guard present > absent else { continue }
             let existence = softmaxSecond(absent, present)
-            guard existence >= 0.55 else { continue }
 
             var maxGrid = 0
             var maxLogit = -Float32.greatestFiniteMagnitude
