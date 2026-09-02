@@ -33,15 +33,44 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
+      - name: Resolve VLCKit dependencies with retry
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4; do
+            echo "VLCKit dependency attempt $attempt/4"
+            if xcodebuild \
+              -project xADAS-iOS.xcodeproj \
+              -scheme xADAS-iOS \
+              -resolvePackageDependencies; then
+              echo "VLCKit dependencies resolved"
+              exit 0
+            fi
+            if [[ "$attempt" -lt 4 ]]; then
+              echo "Dependency download failed; waiting before retry..."
+              sleep $((attempt * 12))
+            fi
+          done
+          echo "VLCKit dependency resolution failed after 4 attempts" >&2
+          exit 1
+
       - name: Verify deployment target
         run: |
           set -euo pipefail
-          SETTINGS=$(xcodebuild \
-            -project xADAS-iOS.xcodeproj \
-            -scheme xADAS-iOS \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -showBuildSettings)
+          SETTINGS=""
+          for attempt in 1 2 3; do
+            if SETTINGS=$(xcodebuild \
+              -project xADAS-iOS.xcodeproj \
+              -scheme xADAS-iOS \
+              -sdk iphoneos \
+              -destination 'generic/platform=iOS' \
+              -disableAutomaticPackageResolution \
+              -showBuildSettings); then
+              break
+            fi
+            echo "showBuildSettings attempt $attempt failed; retrying..."
+            sleep $((attempt * 8))
+          done
+          test -n "$SETTINGS"
           TARGET=$(printf '%s\n' "$SETTINGS" | awk '$1 == "IPHONEOS_DEPLOYMENT_TARGET" && $2 == "=" {print $3; exit}')
           echo "IPHONEOS_DEPLOYMENT_TARGET=$TARGET"
           test "$TARGET" = "16.0"
@@ -55,6 +84,7 @@ jobs:
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
+            -disableAutomaticPackageResolution \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
@@ -177,5 +207,3 @@ jobs:
             ${{ runner.temp }}/deb-contents.txt
           if-no-files-found: ignore
           retention-days: 7
-
-# Trigger rebuild after SILEO_REPO_TOKEN configuration.
