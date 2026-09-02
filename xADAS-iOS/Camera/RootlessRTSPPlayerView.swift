@@ -109,8 +109,7 @@ private final class RTSPH264Client {
     private let accessUnitHandler: ([Data]) -> Void
 
     private var connection: NWConnection?
-    private var rtpListener: NWListener?
-    private var rtpConnections: [NWConnection] = []
+    private var udpRTPConnection: NWConnection?
     private var receiveBuffer = Data()
     private var cseq = 1
     private var pendingResponse: ((Int, [String: String], Data) -> Void)?
@@ -156,7 +155,7 @@ private final class RTSPH264Client {
             case .ready:
                 self.report("70MAI RTSP CONNECTED")
                 self.receiveLoop()
-                self.prepareUDPReceiver()
+                self.describe()
             case .failed(let error):
                 self.report("70MAI RTSP ERROR • \(error.localizedDescription)")
             case .waiting(let error):
@@ -172,10 +171,8 @@ private final class RTSPH264Client {
         stopped = true
         connection?.cancel()
         connection = nil
-        rtpConnections.forEach { $0.cancel() }
-        rtpConnections.removeAll()
-        rtpListener?.cancel()
-        rtpListener = nil
+        udpRTPConnection?.cancel()
+        udpRTPConnection = nil
         receiveBuffer.removeAll()
         pendingResponse = nil
         sessionID = nil
@@ -189,35 +186,35 @@ private final class RTSPH264Client {
         latestPPS = nil
     }
 
-    private func prepareUDPReceiver() {
-        do {
-            let listener = try NWListener(using: .udp, on: rtpPort)
-            listener.newConnectionHandler = { [weak self] connection in
-                guard let self, !self.stopped else {
-                    connection.cancel()
-                    return
-                }
-                self.rtpConnections.append(connection)
-                connection.start(queue: self.queue)
-                self.receiveUDP(on: connection)
-            }
-            listener.stateUpdateHandler = { [weak self] state in
-                guard let self, !self.stopped else { return }
-                switch state {
-                case .ready:
-                    self.report("70MAI RTP/UDP READY • PORT \(self.rtpPort.rawValue)")
-                    self.describe()
-                case .failed(let error):
-                    self.report("70MAI UDP ERROR • \(error.localizedDescription)")
-                default:
-                    break
-                }
-            }
-            rtpListener = listener
-            listener.start(queue: queue)
-        } catch {
-            report("70MAI UDP BIND FAILED • \(error.localizedDescription)")
+    private func startUDPReceiver(serverPort: NWEndpoint.Port, completion: @escaping () -> Void) {
+        guard let hostName = url.host else {
+            report("70MAI UDP HOST INVALID")
+            return
         }
+
+        let parameters = NWParameters.udp
+        parameters.requiredLocalEndpoint = .hostPort(
+            host: .ipv4(IPv4Address("0.0.0.0")!),
+            port: rtpPort
+        )
+        let udp = NWConnection(host: .init(hostName), port: serverPort, using: parameters)
+        udpRTPConnection = udp
+        udp.stateUpdateHandler = { [weak self, weak udp] state in
+            guard let self, let udp, !self.stopped else { return }
+            switch state {
+            case .ready:
+                self.report("70MAI RTP/UDP READY")
+                self.receiveUDP(on: udp)
+                completion()
+            case .failed(let error):
+                self.report("70MAI UDP ERROR • \(error.localizedDescription)")
+            case .waiting(let error):
+                self.report("70MAI UDP WAITING • \(error.localizedDescription)")
+            default:
+                break
+            }
+        }
+        udp.start(queue: queue)
     }
 
     private func receiveUDP(on connection: NWConnection) {
@@ -282,10 +279,24 @@ private final class RTSPH264Client {
             if let raw = headers["session"] {
                 self.sessionID = raw.split(separator: ";", maxSplits: 1).first.map(String.init)
             }
-            let negotiated = headers["transport"] ?? "UDP"
-            self.report("70MAI SETUP OK • \(negotiated.contains("TCP") ? "TCP" : "UDP")")
-            self.play()
+            let negotiated = headers["transport"] ?? ""
+            guard let serverPort = self.serverRTPPort(from: negotiated) else {
+                self.report("70MAI UDP PORT MISSING")
+                return
+            }
+            self.report("70MAI SETUP OK • UDP")
+            self.startUDPReceiver(serverPort: serverPort) { [weak self] in
+                self?.play()
+            }
         }
+    }
+
+    private func serverRTPPort(from transport: String) -> NWEndpoint.Port? {
+        guard let range = transport.range(of: "server_port=", options: .caseInsensitive) else { return nil }
+        let tail = transport[range.upperBound...]
+        let digits = tail.prefix { $0.isNumber }
+        guard let value = UInt16(digits) else { return nil }
+        return NWEndpoint.Port(rawValue: value)
     }
 
     private func play() {
