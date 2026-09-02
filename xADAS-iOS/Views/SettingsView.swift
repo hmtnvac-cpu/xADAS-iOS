@@ -37,8 +37,8 @@ struct SettingsView: View {
                 Section("ADAS") {
                     LabeledContent("Vehicle / lead", value: "Enabled")
                     LabeledContent("Lead distance", value: "Enabled")
-                    LabeledContent("Lane / LDW", value: "Enabled")
-                    LabeledContent("Beep + voice + vibration", value: "Enabled")
+                    LabeledContent("Lane / LDW", value: "Waiting for dedicated AI model")
+                    LabeledContent("Distance warning", value: "Beep + voice + vibration")
                     Button("TEST WARNING SOUND + VOICE") {
                         warningManager.testWarning()
                     }
@@ -66,7 +66,7 @@ struct SettingsView: View {
                 }
 
                 Section("Build") {
-                    LabeledContent("Version", value: "0.9.1")
+                    LabeledContent("Version", value: "0.9.2")
                     LabeledContent("Minimum iOS", value: "16.0")
                     LabeledContent("Video source", value: "70mai A500S RTSP only")
                     LabeledContent("RTSP", value: "Auto reconnect + 700 ms cache")

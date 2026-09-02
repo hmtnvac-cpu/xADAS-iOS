@@ -19,6 +19,12 @@ final class VehicleDetector {
     }
 
     private let vehicleLabels: Set<String> = ["car", "truck", "bus", "motorbike", "motorcycle"]
+    private let vehicleClassIndexes: [(index: Int, label: String)] = [
+        (2, "car"),
+        (3, "motorbike"),
+        (5, "bus"),
+        (7, "truck")
+    ]
     private let request: VNCoreMLRequest
 
     init() throws {
@@ -58,9 +64,10 @@ final class VehicleDetector {
         try handler.perform([request])
 
         let elapsedMS = (CFAbsoluteTimeGetCurrent() - started) * 1_000
-        let observations = request.results as? [VNRecognizedObjectObservation] ?? []
+        let observations = request.results ?? []
+        let recognizedObjects = observations.compactMap { $0 as? VNRecognizedObjectObservation }
 
-        var vehicles = observations.compactMap { observation -> VehicleDetection? in
+        var vehicles = recognizedObjects.compactMap { observation -> VehicleDetection? in
             guard let best = observation.labels.first,
                   best.confidence >= 0.18,
                   vehicleLabels.contains(best.identifier.lowercased()) else {
@@ -74,6 +81,14 @@ final class VehicleDetector {
             )
         }
 
+        // Apple's YOLOv3 Tiny model exposes `confidence` and `coordinates`
+        // multi-arrays. Vision does not always wrap these as recognized-object
+        // observations, so decode the model's real output instead of silently
+        // returning an empty vehicle list.
+        if vehicles.isEmpty {
+            vehicles = decodeFeatureArrays(from: observations)
+        }
+
         guard !vehicles.isEmpty else {
             return ([], elapsedMS)
         }
@@ -83,6 +98,76 @@ final class VehicleDetector {
         }
 
         return (vehicles, elapsedMS)
+    }
+
+    private func decodeFeatureArrays(from observations: [VNObservation]) -> [VehicleDetection] {
+        let features = observations.compactMap { $0 as? VNCoreMLFeatureValueObservation }
+        guard let confidence = features.first(where: { $0.featureName == "confidence" })?
+            .featureValue.multiArrayValue,
+              let coordinates = features.first(where: { $0.featureName == "coordinates" })?
+            .featureValue.multiArrayValue,
+              confidence.shape.count == 2,
+              coordinates.shape.count == 2 else {
+            return []
+        }
+
+        let boxCount = confidence.shape[0].intValue
+        let classCount = confidence.shape[1].intValue
+        let coordinateCount = coordinates.shape[1].intValue
+        guard boxCount > 0, classCount >= 8, coordinateCount >= 4 else { return [] }
+
+        func value(_ array: MLMultiArray, _ row: Int, _ column: Int) -> Double {
+            array[[NSNumber(value: row), NSNumber(value: column)]].doubleValue
+        }
+
+        var detections: [VehicleDetection] = []
+        detections.reserveCapacity(boxCount)
+
+        for row in 0..<boxCount {
+            var bestClass: (label: String, confidence: Double)?
+            for vehicleClass in vehicleClassIndexes where vehicleClass.index < classCount {
+                let score = value(confidence, row, vehicleClass.index)
+                if score >= 0.18, score > (bestClass?.confidence ?? 0) {
+                    bestClass = (vehicleClass.label, score)
+                }
+            }
+
+            guard let bestClass else { continue }
+
+            let centerX = value(coordinates, row, 0)
+            let centerYFromTop = value(coordinates, row, 1)
+            let width = value(coordinates, row, 2)
+            let height = value(coordinates, row, 3)
+            guard centerX.isFinite,
+                  centerYFromTop.isFinite,
+                  width.isFinite,
+                  height.isFinite,
+                  width > 0,
+                  height > 0 else { continue }
+
+            // YOLO uses a top-left image origin. VehicleDetection follows
+            // Vision's normalized bottom-left coordinate convention.
+            let minX = centerX - width / 2
+            let minY = 1 - (centerYFromTop + height / 2)
+            let box = CGRect(
+                x: max(0, min(minX, 1)),
+                y: max(0, min(minY, 1)),
+                width: max(0, min(width, 1)),
+                height: max(0, min(height, 1))
+            ).intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+
+            guard !box.isNull, box.width > 0.01, box.height > 0.01 else { continue }
+
+            detections.append(
+                VehicleDetection(
+                    label: bestClass.label,
+                    confidence: Float(bestClass.confidence),
+                    boundingBox: box
+                )
+            )
+        }
+
+        return detections
     }
 
     private func selectLeadIndex(in detections: [VehicleDetection]) -> Int? {

@@ -29,6 +29,7 @@ final class FrameProcessor: ObservableObject {
     private var laneFrameCounter = 0
     private let inferenceStride = 2
     private let laneStride = 2
+    private let laneDetectionEnabled = false
     private let detector: VehicleDetector?
     private let distanceEstimator = DistanceEstimator()
     private let leadDistanceTracker = LeadDistanceTracker()
@@ -107,7 +108,7 @@ final class FrameProcessor: ObservableObject {
             }
         }
 
-        if laneFrameCounter >= laneStride {
+        if laneDetectionEnabled && laneFrameCounter >= laneStride {
             laneFrameCounter = 0
             laneWasEvaluated = true
             let lane = laneDetector.detect(pixelBuffer: pixelBuffer)

@@ -3,7 +3,7 @@ import AudioToolbox
 import Combine
 import Foundation
 
-final class ADASWarningManager: ObservableObject {
+final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegate, AVSpeechSynthesizerDelegate {
     private var player: AVAudioPlayer?
     private let speechSynthesizer = AVSpeechSynthesizer()
     private var lastDistanceAlertAt: TimeInterval = 0
@@ -13,15 +13,12 @@ final class ADASWarningManager: ObservableObject {
     private var lastDistanceRisk: LeadDistanceRisk = .unavailable
     private var lastLaneState: LaneDepartureState = .unavailable
 
-    init() {
-        try? AVAudioSession.sharedInstance().setCategory(
-            .playback,
-            mode: .voicePrompt,
-            options: [.duckOthers]
-        )
-        try? AVAudioSession.sharedInstance().setActive(true)
+    override init() {
+        super.init()
         player = try? AVAudioPlayer(data: Self.makeBeepWAV())
+        player?.delegate = self
         player?.prepareToPlay()
+        speechSynthesizer.delegate = self
     }
 
     func update(distance: LeadDistanceState, lane: LaneDepartureState) {
@@ -79,7 +76,7 @@ final class ADASWarningManager: ObservableObject {
         key: String,
         forceSpeech: Bool = false
     ) {
-        try? AVAudioSession.sharedInstance().setActive(true)
+        activateWarningAudio()
         player?.currentTime = 0
         // Full app volume; the iPhone's system media volume remains the master control.
         player?.volume = 1.0
@@ -99,6 +96,42 @@ final class ADASWarningManager: ObservableObject {
         speechSynthesizer.speak(utterance)
         lastSpokenKey = key
         lastSpeechAt = now
+    }
+
+    private func activateWarningAudio() {
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(
+            .playback,
+            mode: .voicePrompt,
+            options: [.mixWithOthers]
+        )
+        try? session.setActive(true)
+    }
+
+    private func releaseWarningAudioIfIdle() {
+        guard player?.isPlaying != true, !speechSynthesizer.isSpeaking else { return }
+        try? AVAudioSession.sharedInstance().setActive(
+            false,
+            options: [.notifyOthersOnDeactivation]
+        )
+    }
+
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        releaseWarningAudioIfIdle()
+    }
+
+    func speechSynthesizer(
+        _ synthesizer: AVSpeechSynthesizer,
+        didFinish utterance: AVSpeechUtterance
+    ) {
+        releaseWarningAudioIfIdle()
+    }
+
+    func speechSynthesizer(
+        _ synthesizer: AVSpeechSynthesizer,
+        didCancel utterance: AVSpeechUtterance
+    ) {
+        releaseWarningAudioIfIdle()
     }
 
     private static func makeBeepWAV() -> Data {

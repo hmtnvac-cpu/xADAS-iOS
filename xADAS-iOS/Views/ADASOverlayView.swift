@@ -41,12 +41,6 @@ struct ADASOverlayView: View {
                     Spacer()
                 }
 
-                roadGuide(in: proxy.size)
-
-                if let laneDetection {
-                    laneOverlay(laneDetection, in: proxy.size)
-                }
-
                 ForEach(detections) { detection in
                     detectionBox(detection, in: proxy.size)
                 }
