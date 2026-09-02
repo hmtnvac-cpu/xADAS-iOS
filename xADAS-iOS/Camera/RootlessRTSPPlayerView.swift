@@ -263,10 +263,6 @@ private final class RTSPH264Client {
         connection.receiveMessage { [weak self, weak connection] data, _, _, error in
             guard let self, let connection, !self.stopped else { return }
             if let data, !data.isEmpty {
-                if !self.receivedFirstRTP {
-                    self.receivedFirstRTP = true
-                    self.report("70MAI RTP RECEIVING • UDP")
-                }
                 self.consumeRTP(data)
             }
             if let error {
