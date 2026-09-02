@@ -26,7 +26,10 @@ final class FrameProcessor: ObservableObject {
     private var totalFrames: UInt64 = 0
     private var lastPublishedAt = ProcessInfo.processInfo.systemUptime
     private var inferenceFrameCounter = 0
-    private var laneFrameCounter = 0
+    // Start lane inference on the first decoded frame, then every second
+    // processed frame.  The previous zero start delayed the only diagnostic
+    // path when the stream was dropping frames.
+    private var laneFrameCounter = 1
     private let inferenceStride = 2
     private let laneStride = 2
     private var lastVehicleSeenAt: TimeInterval = 0
