@@ -30,7 +30,7 @@ struct SettingsView: View {
                             .font(.footnote.monospaced())
                     }
 
-                    Text("xADAS uses the 70mai RTSP stream as its driving camera. No 70mai record, album or configuration commands are sent.")
+                    Text("xADAS uses the 70mai RTSP stream as its only driving camera. No 70mai record, album or configuration commands are sent.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -51,10 +51,10 @@ struct SettingsView: View {
                 }
 
                 Section("Build") {
-                    LabeledContent("Version", value: "0.8")
+                    LabeledContent("Version", value: "0.8.1")
                     LabeledContent("Minimum iOS", value: "16.0")
-                    LabeledContent("Video source", value: "70mai A500S RTSP")
-                    LabeledContent("RTSP player", value: "VLCKit")
+                    LabeledContent("Video source", value: "70mai A500S RTSP only")
+                    LabeledContent("RTSP player", value: "VLCKit + retry/status")
                 }
             }
             .navigationTitle("Settings")
