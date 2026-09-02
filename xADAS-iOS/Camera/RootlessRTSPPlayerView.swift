@@ -2,8 +2,53 @@ import AVFoundation
 import CoreMedia
 import Foundation
 import Network
+import SwiftUI
 import UIKit
 import VideoToolbox
+
+struct RootlessSeventyMaiPlayerView: UIViewRepresentable {
+    let urlString: String
+    let restartToken: UUID
+    let frameProcessor: FrameProcessor
+    @Binding var statusText: String
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(statusText: $statusText)
+    }
+
+    func makeUIView(context: Context) -> RootlessRTSPPlayerView {
+        let coordinator = context.coordinator
+        coordinator.restartToken = restartToken
+        let view = RootlessRTSPPlayerView(
+            frameProcessor: frameProcessor,
+            statusHandler: { [weak coordinator] text in
+                coordinator?.statusText.wrappedValue = text
+            }
+        )
+        view.start(urlString: urlString)
+        return view
+    }
+
+    func updateUIView(_ view: RootlessRTSPPlayerView, context: Context) {
+        context.coordinator.statusText = $statusText
+        guard context.coordinator.restartToken != restartToken else { return }
+        context.coordinator.restartToken = restartToken
+        view.start(urlString: urlString)
+    }
+
+    static func dismantleUIView(_ view: RootlessRTSPPlayerView, coordinator: Coordinator) {
+        view.stop()
+    }
+
+    final class Coordinator {
+        var statusText: Binding<String>
+        var restartToken: UUID?
+
+        init(statusText: Binding<String>) {
+            self.statusText = statusText
+        }
+    }
+}
 
 final class RootlessRTSPPlayerView: UIView {
     override class var layerClass: AnyClass { AVSampleBufferDisplayLayer.self }
@@ -14,11 +59,17 @@ final class RootlessRTSPPlayerView: UIView {
 
     private let frameProcessor: FrameProcessor
     private let statusHandler: (String) -> Void
+    private let aiQueue = DispatchQueue(label: "xadas.ai.latest-frame", qos: .userInitiated)
+    private let aiLock = NSLock()
+    private var aiBusy = false
     private var client: RTSPH264Client?
     private lazy var decoder = H264VideoDecoder { [weak self] pixelBuffer in
         guard let self else { return }
-        self.frameProcessor.process(pixelBuffer: pixelBuffer)
+        // Rendering must not wait for model inference. AI deliberately drops
+        // frames while busy so latency cannot accumulate.
         self.enqueue(pixelBuffer: pixelBuffer)
+        self.client?.noteDecodedFrame()
+        self.submitLatestFrameToAI(pixelBuffer)
     }
 
     init(frameProcessor: FrameProcessor, statusHandler: @escaping (String) -> Void) {
@@ -99,6 +150,24 @@ final class RootlessRTSPPlayerView: UIView {
             self.displayLayer.enqueue(sampleBuffer)
         }
     }
+
+    private func submitLatestFrameToAI(_ pixelBuffer: CVPixelBuffer) {
+        aiLock.lock()
+        guard !aiBusy else {
+            aiLock.unlock()
+            return
+        }
+        aiBusy = true
+        aiLock.unlock()
+
+        aiQueue.async { [weak self] in
+            guard let self else { return }
+            self.frameProcessor.process(pixelBuffer: pixelBuffer)
+            self.aiLock.lock()
+            self.aiBusy = false
+            self.aiLock.unlock()
+        }
+    }
 }
 
 private enum RTSPTransportMode: Equatable {
@@ -125,6 +194,13 @@ private final class RTSPH264Client {
     private var receivedFirstRTP = false
     private var transportMode: RTSPTransportMode = .udp
     private var rtpWatchdog: DispatchWorkItem?
+    private var streamWatchdog: DispatchWorkItem?
+    private var keepAliveWorkItem: DispatchWorkItem?
+    private var reconnectWorkItem: DispatchWorkItem?
+    private var lastRTPAt: TimeInterval = 0
+    private var lastDecodedFrameAt: TimeInterval = 0
+    private var playStartedAt: TimeInterval = 0
+    private var hasDecodedFrame = false
     private let rtpPort = NWEndpoint.Port(rawValue: 50_000)!
     private let rtcpPort = NWEndpoint.Port(rawValue: 50_001)!
 
@@ -164,7 +240,7 @@ private final class RTSPH264Client {
         let connection = NWConnection(host: .init(hostName), port: port, using: .tcp)
         self.connection = connection
         connection.stateUpdateHandler = { [weak self] state in
-            guard let self, !self.stopped else { return }
+            guard let self, !self.stopped, self.connection === connection else { return }
             switch state {
             case .ready:
                 self.report("70MAI RTSP CONNECTED • \(self.transportMode == .udp ? "UDP" : "TCP")")
@@ -172,6 +248,7 @@ private final class RTSPH264Client {
                 self.describe()
             case .failed(let error):
                 self.report("70MAI RTSP ERROR • \(error.localizedDescription)")
+                self.scheduleReconnect(alternateTransport: true)
             case .waiting(let error):
                 self.report("70MAI WAITING • \(error.localizedDescription)")
             default:
@@ -184,6 +261,10 @@ private final class RTSPH264Client {
     private func resetNetworkState() {
         rtpWatchdog?.cancel()
         rtpWatchdog = nil
+        streamWatchdog?.cancel()
+        streamWatchdog = nil
+        keepAliveWorkItem?.cancel()
+        keepAliveWorkItem = nil
         connection?.cancel()
         connection = nil
         udpRTPConnection?.cancel()
@@ -195,6 +276,10 @@ private final class RTSPH264Client {
         setupTarget = nil
         cseq = 1
         receivedFirstRTP = false
+        lastRTPAt = 0
+        lastDecodedFrameAt = 0
+        playStartedAt = 0
+        hasDecodedFrame = false
         currentTimestamp = nil
         accessUnit.removeAll()
         fragmentedNAL = nil
@@ -212,6 +297,12 @@ private final class RTSPH264Client {
         stopped = true
         rtpWatchdog?.cancel()
         rtpWatchdog = nil
+        streamWatchdog?.cancel()
+        streamWatchdog = nil
+        keepAliveWorkItem?.cancel()
+        keepAliveWorkItem = nil
+        reconnectWorkItem?.cancel()
+        reconnectWorkItem = nil
         connection?.cancel()
         connection = nil
         udpRTPConnection?.cancel()
@@ -229,6 +320,14 @@ private final class RTSPH264Client {
         latestPPS = nil
     }
 
+    func noteDecodedFrame() {
+        queue.async { [weak self] in
+            guard let self, !self.stopped else { return }
+            self.hasDecodedFrame = true
+            self.lastDecodedFrameAt = ProcessInfo.processInfo.systemUptime
+        }
+    }
+
     private func startUDPReceiver(serverPort: NWEndpoint.Port, completion: @escaping () -> Void) {
         guard let hostName = url.host else {
             report("70MAI UDP HOST INVALID")
@@ -243,7 +342,10 @@ private final class RTSPH264Client {
         let udp = NWConnection(host: .init(hostName), port: serverPort, using: parameters)
         udpRTPConnection = udp
         udp.stateUpdateHandler = { [weak self, weak udp] state in
-            guard let self, let udp, !self.stopped else { return }
+            guard let self,
+                  let udp,
+                  !self.stopped,
+                  self.udpRTPConnection === udp else { return }
             switch state {
             case .ready:
                 self.report("70MAI RTP/UDP READY")
@@ -251,6 +353,7 @@ private final class RTSPH264Client {
                 completion()
             case .failed(let error):
                 self.report("70MAI UDP ERROR • \(error.localizedDescription)")
+                self.scheduleReconnect(alternateTransport: true)
             case .waiting(let error):
                 self.report("70MAI UDP WAITING • \(error.localizedDescription)")
             default:
@@ -262,12 +365,16 @@ private final class RTSPH264Client {
 
     private func receiveUDP(on connection: NWConnection) {
         connection.receiveMessage { [weak self, weak connection] data, _, _, error in
-            guard let self, let connection, !self.stopped else { return }
+            guard let self,
+                  let connection,
+                  !self.stopped,
+                  self.udpRTPConnection === connection else { return }
             if let data, !data.isEmpty {
                 self.consumeRTP(data)
             }
             if let error {
                 self.report("70MAI UDP RECEIVE ERROR • \(error.localizedDescription)")
+                self.scheduleReconnect(alternateTransport: true)
                 return
             }
             self.receiveUDP(on: connection)
@@ -279,10 +386,12 @@ private final class RTSPH264Client {
             guard let self else { return }
             guard code == 200 else {
                 self.report("70MAI DESCRIBE FAILED • \(code)")
+                self.scheduleReconnect(alternateTransport: true)
                 return
             }
             guard let sdp = String(data: body, encoding: .utf8) else {
                 self.report("70MAI SDP INVALID")
+                self.scheduleReconnect(alternateTransport: true)
                 return
             }
 
@@ -294,6 +403,7 @@ private final class RTSPH264Client {
                 ?? self.directoryURL(self.url.absoluteString)
             guard let trackURL = self.videoTrackURL(from: sdp, baseURL: contentBase) else {
                 self.report("70MAI SDP VIDEO NOT FOUND")
+                self.scheduleReconnect(alternateTransport: true)
                 return
             }
 
@@ -316,6 +426,7 @@ private final class RTSPH264Client {
             guard let self else { return }
             guard code == 200 else {
                 self.report("70MAI SETUP FAILED • \(code)")
+                self.scheduleReconnect(alternateTransport: true)
                 return
             }
             if let raw = headers["session"] {
@@ -360,7 +471,10 @@ private final class RTSPH264Client {
             guard let self else { return }
             if code == 200 {
                 self.report("70MAI PLAYING • WAITING RTP • \(self.transportMode == .udp ? "UDP" : "TCP")")
+                self.playStartedAt = ProcessInfo.processInfo.systemUptime
                 self.startRTPWatchdog()
+                self.scheduleStreamWatchdog()
+                self.scheduleKeepAlive()
                 return
             }
 
@@ -375,6 +489,7 @@ private final class RTSPH264Client {
                 return
             }
             self.report("70MAI PLAY FAILED • \(code)")
+            self.scheduleReconnect(alternateTransport: true)
         }
     }
 
@@ -389,7 +504,71 @@ private final class RTSPH264Client {
             }
         }
         rtpWatchdog = item
-        queue.asyncAfter(deadline: .now() + 4.0, execute: item)
+        queue.asyncAfter(deadline: .now() + 2.5, execute: item)
+    }
+
+    private func scheduleStreamWatchdog() {
+        streamWatchdog?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, !self.stopped else { return }
+            let now = ProcessInfo.processInfo.systemUptime
+            let rtpStalled = self.receivedFirstRTP && now - self.lastRTPAt > 2.0
+            let decodeStalled = self.hasDecodedFrame && now - self.lastDecodedFrameAt > 2.0
+            let neverDecoded = !self.hasDecodedFrame
+                && self.playStartedAt > 0
+                && now - self.playStartedAt > 4.0
+
+            if rtpStalled || decodeStalled || neverDecoded {
+                self.report("70MAI STREAM STALLED • RECOVERING")
+                self.scheduleReconnect(alternateTransport: true)
+            } else {
+                self.scheduleStreamWatchdog()
+            }
+        }
+        streamWatchdog = item
+        queue.asyncAfter(deadline: .now() + 1.0, execute: item)
+    }
+
+    private func scheduleKeepAlive() {
+        keepAliveWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, !self.stopped else { return }
+            var headers: [String: String] = [:]
+            if let sessionID = self.sessionID { headers["Session"] = sessionID }
+            let target = self.playTarget ?? self.directoryURL(self.url.absoluteString)
+            self.sendRequest(method: "OPTIONS", target: target, headers: headers) { [weak self] code, _, _ in
+                guard let self, !self.stopped else { return }
+                if code == 0 || code >= 500 {
+                    self.report("70MAI KEEPALIVE FAILED • RECOVERING")
+                    self.scheduleReconnect(alternateTransport: true)
+                } else {
+                    self.scheduleKeepAlive()
+                }
+            }
+        }
+        keepAliveWorkItem = item
+        queue.asyncAfter(deadline: .now() + 12.0, execute: item)
+    }
+
+    private func scheduleReconnect(alternateTransport: Bool) {
+        guard !stopped, reconnectWorkItem == nil else { return }
+        streamWatchdog?.cancel()
+        streamWatchdog = nil
+        keepAliveWorkItem?.cancel()
+        keepAliveWorkItem = nil
+        rtpWatchdog?.cancel()
+        rtpWatchdog = nil
+
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, !self.stopped else { return }
+            self.reconnectWorkItem = nil
+            if alternateTransport {
+                self.transportMode = self.transportMode == .udp ? .tcp : .udp
+            }
+            self.connectRTSP()
+        }
+        reconnectWorkItem = item
+        queue.asyncAfter(deadline: .now() + 0.6, execute: item)
     }
 
     private func sendRequest(
@@ -411,23 +590,31 @@ private final class RTSPH264Client {
         pendingResponse = completion
         let data = lines.joined(separator: "\r\n").data(using: .utf8)
         connection.send(content: data, completion: .contentProcessed { [weak self] error in
-            if let error { self?.report("70MAI SEND ERROR • \(error.localizedDescription)") }
+            if let error {
+                self?.report("70MAI SEND ERROR • \(error.localizedDescription)")
+                self?.scheduleReconnect(alternateTransport: true)
+            }
         })
     }
 
     private func receiveLoop() {
         guard let connection, !stopped else { return }
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, complete, error in
-            guard let self, !self.stopped else { return }
+            guard let self, !self.stopped, self.connection === connection else { return }
             if let data, !data.isEmpty {
                 self.receiveBuffer.append(data)
                 self.consumeBuffer()
             }
             if let error {
                 self.report("70MAI RECEIVE ERROR • \(error.localizedDescription)")
+                self.scheduleReconnect(alternateTransport: true)
                 return
             }
-            if !complete { self.receiveLoop() }
+            if complete {
+                self.scheduleReconnect(alternateTransport: true)
+            } else {
+                self.receiveLoop()
+            }
         }
     }
 
@@ -524,6 +711,7 @@ private final class RTSPH264Client {
 
     private func consumeRTP(_ packet: Data) {
         guard packet.count >= 12 else { return }
+        lastRTPAt = ProcessInfo.processInfo.systemUptime
         if !receivedFirstRTP {
             receivedFirstRTP = true
             rtpWatchdog?.cancel()
@@ -715,7 +903,7 @@ private final class H264VideoDecoder {
         VTDecompressionSessionDecodeFrame(
             session,
             sampleBuffer: sampleBuffer,
-            flags: [._EnableAsynchronousDecompression, ._EnableTemporalProcessing],
+            flags: [._EnableAsynchronousDecompression],
             frameRefcon: nil,
             infoFlagsOut: &flagsOut
         )
@@ -772,6 +960,13 @@ private final class H264VideoDecoder {
             decompressionSessionOut: &newSession
         )
         guard createStatus == noErr else { return }
+        if let newSession {
+            VTSessionSetProperty(
+                newSession,
+                key: kVTDecompressionPropertyKey_RealTime,
+                value: kCFBooleanTrue
+            )
+        }
         session = newSession
     }
 }
