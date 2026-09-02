@@ -28,7 +28,7 @@ final class FrameProcessor: ObservableObject {
     private var inferenceFrameCounter = 0
     private var laneFrameCounter = 0
     private let inferenceStride = 2
-    private let laneStride = 4
+    private let laneStride = 3
     private let detector: VehicleDetector?
     private let distanceEstimator = DistanceEstimator()
     private let leadDistanceTracker = LeadDistanceTracker()
@@ -47,15 +47,18 @@ final class FrameProcessor: ObservableObject {
 
     func process(sampleBuffer: CMSampleBuffer) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        let sampleTime = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
+        let timestamp = sampleTime.isFinite ? sampleTime : ProcessInfo.processInfo.systemUptime
+        process(pixelBuffer: pixelBuffer, timestamp: timestamp)
+    }
 
+    func process(pixelBuffer: CVPixelBuffer, timestamp: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         totalFrames &+= 1
         inferenceFrameCounter &+= 1
         laneFrameCounter &+= 1
 
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
-        let sampleTime = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
-        let timestamp = sampleTime.isFinite ? sampleTime : ProcessInfo.processInfo.systemUptime
 
         var newDetections: [VehicleDetection]?
         var newInferenceMS: Double?
@@ -130,7 +133,7 @@ final class FrameProcessor: ObservableObject {
                 self.frameWidth = width
                 self.frameHeight = height
                 self.processedFrames = count
-                self.pipelineStatus = "FRAME PIPELINE ACTIVE"
+                self.pipelineStatus = "70MAI FRAME PIPELINE ACTIVE"
             }
 
             if let newDetections {
