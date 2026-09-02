@@ -45,6 +45,10 @@ struct ADASOverlayView: View {
                     detectionBox(detection, in: proxy.size)
                 }
 
+                if let laneDetection {
+                    laneOverlay(laneDetection, in: proxy.size)
+                }
+
                 if let distance = leadDistanceState.distanceMeters {
                     Text(String(format: "%.1f m", distance))
                         .font(.system(size: 34, weight: .bold, design: .rounded))

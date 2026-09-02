@@ -19,7 +19,7 @@ final class FrameProcessor: ObservableObject {
     )
     @Published private(set) var laneDetection: LaneDetection?
     @Published private(set) var laneDepartureState: LaneDepartureState = .unavailable
-    @Published private(set) var laneStatus = "LANE DETECTOR READY"
+    @Published private(set) var laneStatus = "LANE MODEL LOADING"
 
     var horizontalFieldOfViewDegrees: Double = 0
 
@@ -28,12 +28,11 @@ final class FrameProcessor: ObservableObject {
     private var inferenceFrameCounter = 0
     private var laneFrameCounter = 0
     private let inferenceStride = 2
-    private let laneStride = 2
-    private let laneDetectionEnabled = false
+    private let laneStride = 5
     private let detector: VehicleDetector?
     private let distanceEstimator = DistanceEstimator()
     private let leadDistanceTracker = LeadDistanceTracker()
-    private let laneDetector = LaneDetector()
+    private let laneDetector: LaneAIDetector?
     private let laneDepartureMonitor = LaneDepartureMonitor()
 
     init() {
@@ -43,6 +42,14 @@ final class FrameProcessor: ObservableObject {
         } catch {
             detector = nil
             detectorStatus = error.localizedDescription
+        }
+
+        do {
+            laneDetector = try LaneAIDetector()
+            laneStatus = "UFLD V2 LANE MODEL READY"
+        } catch {
+            laneDetector = nil
+            laneStatus = error.localizedDescription
         }
     }
 
@@ -108,12 +115,21 @@ final class FrameProcessor: ObservableObject {
             }
         }
 
-        if laneDetectionEnabled && laneFrameCounter >= laneStride {
+        if laneFrameCounter >= laneStride, let laneDetector {
             laneFrameCounter = 0
             laneWasEvaluated = true
-            let lane = laneDetector.detect(pixelBuffer: pixelBuffer)
-            newLaneDetection = lane
-            newLaneState = laneDepartureMonitor.update(with: lane)
+            do {
+                let lane = try laneDetector.detect(pixelBuffer: pixelBuffer)
+                newLaneDetection = lane
+                newLaneState = laneDepartureMonitor.update(with: lane)
+            } catch {
+                newLaneDetection = nil
+                newLaneState = laneDepartureMonitor.update(with: nil)
+                let message = error.localizedDescription
+                DispatchQueue.main.async { [weak self] in
+                    self?.laneStatus = "LANE MODEL ERROR: \(message)"
+                }
+            }
         }
 
         let now = ProcessInfo.processInfo.systemUptime

@@ -37,12 +37,12 @@ struct SettingsView: View {
                 Section("ADAS") {
                     LabeledContent("Vehicle / lead", value: "Enabled")
                     LabeledContent("Lead distance", value: "Enabled")
-                    LabeledContent("Lane / LDW", value: "Waiting for dedicated AI model")
+                    LabeledContent("Lane / LDW", value: "UFLD V2 AI enabled")
                     LabeledContent("Distance warning", value: "Beep + voice + vibration")
                     Button("TEST WARNING SOUND + VOICE") {
                         warningManager.testWarning()
                     }
-                    Text("Warning sound and Vietnamese voice use the iPhone system media volume.")
+                    Text("Distance and lane warnings use the iPhone system media volume without lowering music.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Text("Re-run CALIBRATE after switching from the iPhone camera to the fixed 70mai camera so distance and horizon match the dashcam mounting position.")
@@ -66,11 +66,11 @@ struct SettingsView: View {
                 }
 
                 Section("Build") {
-                    LabeledContent("Version", value: "0.9.2")
+                    LabeledContent("Version", value: "0.9.3")
                     LabeledContent("Minimum iOS", value: "16.0")
                     LabeledContent("Video source", value: "70mai A500S RTSP only")
                     LabeledContent("RTSP", value: "Auto reconnect + 700 ms cache")
-                    LabeledContent("AI bridge", value: "Decoded VLC snapshots")
+                    LabeledContent("Lane model", value: "UFLD V2 • on-device")
                 }
             }
             .navigationTitle("Settings")
