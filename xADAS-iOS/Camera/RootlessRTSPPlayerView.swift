@@ -2,6 +2,7 @@ import AVFoundation
 import CoreMedia
 import Foundation
 import Network
+import QuartzCore
 import SwiftUI
 import UIKit
 import VideoToolbox
@@ -51,11 +52,7 @@ struct RootlessSeventyMaiPlayerView: UIViewRepresentable {
 }
 
 final class RootlessRTSPPlayerView: UIView {
-    override class var layerClass: AnyClass { AVSampleBufferDisplayLayer.self }
-
-    private var displayLayer: AVSampleBufferDisplayLayer {
-        layer as! AVSampleBufferDisplayLayer
-    }
+    private let displayLayer = AVSampleBufferDisplayLayer()
 
     private let frameProcessor: FrameProcessor
     private let statusHandler: (String) -> Void
@@ -78,9 +75,19 @@ final class RootlessRTSPPlayerView: UIView {
         super.init(frame: .zero)
         backgroundColor = .black
         displayLayer.videoGravity = .resizeAspectFill
+        displayLayer.backgroundColor = UIColor.black.cgColor
+        layer.addSublayer(displayLayer)
     }
 
     required init?(coder: NSCoder) { nil }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        displayLayer.frame = bounds
+        CATransaction.commit()
+    }
 
     func start(urlString: String) {
         stop()
@@ -101,7 +108,10 @@ final class RootlessRTSPPlayerView: UIView {
             }
         )
         self.client = client
-        client.start()
+        SeventyMaiPreviewSession.shared.prepare(host: url.host ?? "192.168.0.1") { [weak self, weak client] in
+            guard let self, self.client === client else { return }
+            client?.start()
+        }
     }
 
     func stop() {
@@ -145,7 +155,7 @@ final class RootlessRTSPPlayerView: UIView {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             if self.displayLayer.status == .failed {
-                self.displayLayer.flush()
+                self.displayLayer.flushAndRemoveImage()
             }
             self.displayLayer.enqueue(sampleBuffer)
         }
