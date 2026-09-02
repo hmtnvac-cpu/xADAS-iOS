@@ -13,7 +13,7 @@ struct DriveView: View {
 
     var body: some View {
         ZStack {
-            RootlessSeventyMaiPlayerView(
+            SeventyMaiPlayerView(
                 urlString: seventyMaiURL,
                 restartToken: restartToken,
                 frameProcessor: frameProcessor,
