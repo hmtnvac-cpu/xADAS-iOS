@@ -6,6 +6,7 @@ struct DriveView: View {
     @State private var showSettings = false
     @State private var rtspStatus = "70MAI STARTING"
     @State private var restartToken = UUID()
+    @State private var useVLCFallback = false
     @StateObject private var frameProcessor = FrameProcessor()
     @StateObject private var warningManager = ADASWarningManager()
 
@@ -13,12 +14,23 @@ struct DriveView: View {
 
     var body: some View {
         ZStack {
-            SeventyMaiPlayerView(
-                urlString: seventyMaiURL,
-                restartToken: restartToken,
-                frameProcessor: frameProcessor,
-                statusText: $rtspStatus
-            )
+            Group {
+                if useVLCFallback {
+                    SeventyMaiPlayerView(
+                        urlString: seventyMaiURL,
+                        restartToken: restartToken,
+                        frameProcessor: frameProcessor,
+                        statusText: $rtspStatus
+                    )
+                } else {
+                    RootlessSeventyMaiPlayerView(
+                        urlString: seventyMaiURL,
+                        restartToken: restartToken,
+                        frameProcessor: frameProcessor,
+                        statusText: $rtspStatus
+                    )
+                }
+            }
             .ignoresSafeArea()
 
             ADASOverlayView(
@@ -47,6 +59,7 @@ struct DriveView: View {
                 if frameProcessor.frameWidth == 0 || frameProcessor.frameHeight == 0 {
                     Button("RETRY 70MAI") {
                         rtspStatus = "70MAI RETRYING"
+                        useVLCFallback = false
                         restartToken = UUID()
                     }
                     .buttonStyle(ADASButtonStyle())
@@ -70,10 +83,13 @@ struct DriveView: View {
         }
         .onAppear {
             frameProcessor.horizontalFieldOfViewDegrees = 140
+            scheduleNativeFallbackCheck(for: restartToken)
         }
         .onChange(of: scenePhase) { phase in
             if phase == .active {
+                useVLCFallback = false
                 restartToken = UUID()
+                scheduleNativeFallbackCheck(for: restartToken)
             }
         }
         .onChange(of: frameProcessor.leadDistanceState) { newValue in
@@ -83,6 +99,15 @@ struct DriveView: View {
             warningManager.update(distance: frameProcessor.leadDistanceState, lane: newValue)
         }
         .persistentSystemOverlays(.hidden)
+    }
+
+    private func scheduleNativeFallbackCheck(for token: UUID) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+            guard restartToken == token, !useVLCFallback,
+                  frameProcessor.frameWidth == 0 || frameProcessor.frameHeight == 0 else { return }
+            rtspStatus = "70MAI VLC FALLBACK"
+            useVLCFallback = true
+        }
     }
 }
 
