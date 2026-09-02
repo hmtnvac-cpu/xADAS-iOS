@@ -5,18 +5,16 @@ struct SettingsView: View {
     @State private var showRoadGuide = true
     @State private var showDebugHUD = true
     @AppStorage(LeadDistanceTracker.referenceDistanceKey) private var referenceDistance: Double = 55
-    @AppStorage(CameraSource.seventyMaiURLKey) private var seventyMaiURL = "rtsp://192.168.0.1:554/00000000"
     @StateObject private var rtspProbe = RTSPProbe()
+
+    private let seventyMaiURL = CameraSource.seventyMaiURL
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("70mai A500S") {
                     LabeledContent("Camera source", value: "70mai only")
-
-                    TextField("RTSP URL", text: $seventyMaiURL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
+                    LabeledContent("RTSP URL", value: "192.168.0.1/00000000")
 
                     Button("TEST 70MAI RTSP") {
                         rtspProbe.probe(urlString: seventyMaiURL)
@@ -30,7 +28,7 @@ struct SettingsView: View {
                             .font(.footnote.monospaced())
                     }
 
-                    Text("xADAS uses the 70mai RTSP stream as its only driving camera. No 70mai record, album or configuration commands are sent.")
+                    Text("The RTSP source is fixed to the exact URL confirmed working in VLC. xADAS does not send record, album or configuration commands to the dashcam.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -51,10 +49,10 @@ struct SettingsView: View {
                 }
 
                 Section("Build") {
-                    LabeledContent("Version", value: "0.8.1")
+                    LabeledContent("Version", value: "0.8.2")
                     LabeledContent("Minimum iOS", value: "16.0")
                     LabeledContent("Video source", value: "70mai A500S RTSP only")
-                    LabeledContent("RTSP player", value: "VLCKit + retry/status")
+                    LabeledContent("RTSP transport", value: "VLC default negotiation")
                 }
             }
             .navigationTitle("Settings")
@@ -64,7 +62,6 @@ struct SettingsView: View {
                 }
             }
         }
-        .onAppear { CameraSource.registerDefaults() }
         .onDisappear { rtspProbe.stop() }
     }
 }
