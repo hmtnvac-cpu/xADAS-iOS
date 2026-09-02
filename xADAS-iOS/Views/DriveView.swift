@@ -13,7 +13,7 @@ struct DriveView: View {
 
     var body: some View {
         ZStack {
-            SeventyMaiPlayerView(
+            RootlessSeventyMaiPlayerView(
                 urlString: seventyMaiURL,
                 restartToken: restartToken,
                 frameProcessor: frameProcessor,
@@ -23,7 +23,7 @@ struct DriveView: View {
 
             ADASOverlayView(
                 isCameraRunning: frameProcessor.frameWidth > 0 && frameProcessor.frameHeight > 0,
-                fps: rtspStatus.contains("PLAYING") ? 4.5 : 0,
+                fps: frameProcessor.frameWidth > 0 ? 4.5 : 0,
                 pipelineStatus: rtspStatus,
                 detectorStatus: frameProcessor.detectorStatus,
                 inferenceMS: frameProcessor.inferenceMS,
@@ -36,6 +36,10 @@ struct DriveView: View {
                 laneStatus: frameProcessor.laneStatus,
                 laneDepartureState: frameProcessor.laneDepartureState
             )
+
+            if showCalibration {
+                CameraAlignmentOverlay(isPresented: $showCalibration)
+            }
 
             VStack {
                 Spacer()
@@ -52,22 +56,20 @@ struct DriveView: View {
             .foregroundStyle(.white)
         }
         .overlay(alignment: .bottom) {
-            HStack(spacing: 16) {
-                Button("CALIBRATE") { showCalibration = true }
-                Button("SETTING") { showSettings = true }
+            if !showCalibration {
+                HStack(spacing: 16) {
+                    Button("CALIBRATE") { showCalibration = true }
+                    Button("SETTING") { showSettings = true }
+                }
+                .buttonStyle(ADASButtonStyle())
+                .padding(.bottom, 22)
             }
-            .buttonStyle(ADASButtonStyle())
-            .padding(.bottom, 22)
-        }
-        .sheet(isPresented: $showCalibration) {
-            CalibrationView()
         }
         .sheet(isPresented: $showSettings) {
             SettingsView()
         }
         .onAppear {
             frameProcessor.horizontalFieldOfViewDegrees = 140
-            restartToken = UUID()
         }
         .onChange(of: scenePhase) { phase in
             if phase == .active {
