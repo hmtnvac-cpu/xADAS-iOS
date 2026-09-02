@@ -36,8 +36,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.hmtnvac.xadas
-        MARKETING_VERSION: 0.9.3
-        CURRENT_PROJECT_VERSION: 93
+        MARKETING_VERSION: 0.9.4
+        CURRENT_PROJECT_VERSION: 94
         TARGETED_DEVICE_FAMILY: "1"
         INFOPLIST_FILE: xADAS-iOS/Info.plist
         GENERATE_INFOPLIST_FILE: NO
