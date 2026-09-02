@@ -14,21 +14,13 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         view.backgroundColor = .black
-        context.coordinator.attach(
-            view: view,
-            urlString: urlString,
-            restartToken: restartToken
-        )
+        context.coordinator.attach(view: view, urlString: urlString, restartToken: restartToken)
         return view
     }
 
     func updateUIView(_ uiView: UIView, context: Context) {
         context.coordinator.statusText = $statusText
-        context.coordinator.attach(
-            view: uiView,
-            urlString: urlString,
-            restartToken: restartToken
-        )
+        context.coordinator.attach(view: uiView, urlString: urlString, restartToken: restartToken)
     }
 
     static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
@@ -70,41 +62,31 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
                 return
             }
 
-            media.addOption(":rtsp-tcp")
-            media.addOption(":network-caching=250")
-            media.addOption(":live-caching=250")
-            media.addOption(":clock-jitter=0")
-            media.addOption(":clock-synchro=0")
+            // Match VLC's default RTSP behaviour. Do NOT force RTSP-over-TCP;
+            // the A500S stream is known to work in VLC using its default transport negotiation.
+            media.addOption(":network-caching=400")
+            media.addOption(":live-caching=400")
 
             player.media = media
             if let currentView {
                 player.drawable = currentView
             }
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-                guard let self else { return }
-                self.player.play()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                self?.player.play()
             }
         }
 
         func mediaPlayerStateChanged(_ newState: VLCMediaPlayerState) {
             switch newState {
-            case .opening:
-                setStatus("70MAI OPENING")
-            case .playing:
-                setStatus("70MAI PLAYING")
-            case .paused:
-                setStatus("70MAI PAUSED")
-            case .stopping:
-                setStatus("70MAI STOPPING")
-            case .stopped:
-                setStatus("70MAI STOPPED • RETRY")
-            case .error:
-                setStatus("70MAI ERROR • RETRY")
-            case .nothingSpecial:
-                setStatus("70MAI WAITING")
-            @unknown default:
-                setStatus("70MAI UNKNOWN STATE")
+            case .opening: setStatus("70MAI OPENING")
+            case .playing: setStatus("70MAI PLAYING")
+            case .paused: setStatus("70MAI PAUSED")
+            case .stopping: setStatus("70MAI STOPPING")
+            case .stopped: setStatus("70MAI STOPPED • RETRY")
+            case .error: setStatus("70MAI ERROR • RETRY")
+            case .nothingSpecial: setStatus("70MAI WAITING")
+            @unknown default: setStatus("70MAI UNKNOWN STATE")
             }
         }
 
