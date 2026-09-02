@@ -87,16 +87,16 @@ jobs:
           mkdir -p "$RUNNER_TEMP/Payload"
           cp -R "$APP_PATH" "$RUNNER_TEMP/Payload/"
           cd "$RUNNER_TEMP"
-          /usr/bin/zip -qry xADAS-iOS-V0.7-unsigned.ipa Payload
-          shasum -a 256 xADAS-iOS-V0.7-unsigned.ipa > xADAS-iOS-V0.7-unsigned.sha256
+          /usr/bin/zip -qry xADAS-iOS-V0.8-unsigned.ipa Payload
+          shasum -a 256 xADAS-iOS-V0.8-unsigned.ipa > xADAS-iOS-V0.8-unsigned.sha256
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: xADAS-iOS-V0.7-unsigned
+          name: xADAS-iOS-V0.8-unsigned
           path: |
-            ${{ runner.temp }}/xADAS-iOS-V0.7-unsigned.ipa
-            ${{ runner.temp }}/xADAS-iOS-V0.7-unsigned.sha256
+            ${{ runner.temp }}/xADAS-iOS-V0.8-unsigned.ipa
+            ${{ runner.temp }}/xADAS-iOS-V0.8-unsigned.sha256
           if-no-files-found: error
           retention-days: 14
 
