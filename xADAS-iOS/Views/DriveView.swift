@@ -6,7 +6,8 @@ struct DriveView: View {
     @State private var showSettings = false
     @State private var rtspStatus = "70MAI STARTING"
     @State private var restartToken = UUID()
-    @AppStorage(CameraSource.seventyMaiURLKey) private var seventyMaiURL = "rtsp://192.168.0.1:554/00000000"
+
+    private let seventyMaiURL = CameraSource.seventyMaiURL
 
     var body: some View {
         ZStack {
@@ -35,17 +36,17 @@ struct DriveView: View {
                         Text(rtspStatus)
                             .font(.caption2.monospaced().bold())
                             .foregroundStyle(rtspStatus.contains("ERROR") || rtspStatus.contains("FAILED") ? .red : .white.opacity(0.9))
-                        Text("VIDEO SOURCE • DASHCAM ONLY")
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.white.opacity(0.8))
+                        Text("70MAI ONLY • NO IPHONE CAMERA")
+                            .font(.caption2.monospaced().bold())
+                            .foregroundStyle(.cyan)
                     }
 
                     Spacer()
 
                     VStack(alignment: .trailing, spacing: 4) {
-                        Text("V0.8.1")
+                        Text("V0.8.2")
                             .font(.caption.monospaced().bold())
-                        Text("RTSP /00000000")
+                        Text("192.168.0.1/00000000")
                             .font(.caption2.monospaced())
                     }
                 }
@@ -80,7 +81,6 @@ struct DriveView: View {
             SettingsView()
         }
         .onAppear {
-            CameraSource.registerDefaults()
             restartToken = UUID()
         }
         .onChange(of: scenePhase) { phase in
