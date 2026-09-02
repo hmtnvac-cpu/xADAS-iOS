@@ -38,7 +38,6 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
         private var currentURL: String?
         private var currentRestartToken: UUID?
         private weak var currentView: UIView?
-        private var nativeRTSPView: RootlessRTSPPlayerView?
         private var snapshotTimer: Timer?
         private var reconnectWorkItem: DispatchWorkItem?
         private var snapshotInFlight = false
@@ -46,10 +45,6 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
         private var snapshotCounter: UInt64 = 0
         private var stoppedByOwner = false
         private var consecutiveFailures = 0
-
-        private var isRootlessRuntime: Bool {
-            FileManager.default.fileExists(atPath: "/var/jb")
-        }
 
         init(statusText: Binding<String>, frameProcessor: FrameProcessor) {
             self.statusText = statusText
@@ -70,6 +65,7 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
 
         func attach(view: UIView, urlString: String, restartToken: UUID) {
             currentView = view
+            player.drawable = view
 
             let needsRestart = currentURL != urlString || currentRestartToken != restartToken
             guard needsRestart else { return }
@@ -78,46 +74,10 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
             currentRestartToken = restartToken
             stoppedByOwner = false
             consecutiveFailures = 0
-
-            if isRootlessRuntime {
-                startNativeRTSP(in: view, urlString: urlString)
-            } else {
-                nativeRTSPView?.stop()
-                nativeRTSPView?.removeFromSuperview()
-                nativeRTSPView = nil
-                player.drawable = view
-                startVLC(urlString: urlString)
-            }
+            start(urlString: urlString)
         }
 
-        private func startNativeRTSP(in container: UIView, urlString: String) {
-            reconnectWorkItem?.cancel()
-            stopSnapshotLoop()
-            player.stop()
-            player.drawable = nil
-
-            nativeRTSPView?.stop()
-            nativeRTSPView?.removeFromSuperview()
-
-            let native = RootlessRTSPPlayerView(
-                frameProcessor: frameProcessor,
-                statusHandler: { [weak self] text in
-                    self?.setStatus(text)
-                }
-            )
-            native.translatesAutoresizingMaskIntoConstraints = false
-            container.addSubview(native)
-            NSLayoutConstraint.activate([
-                native.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-                native.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-                native.topAnchor.constraint(equalTo: container.topAnchor),
-                native.bottomAnchor.constraint(equalTo: container.bottomAnchor)
-            ])
-            nativeRTSPView = native
-            native.start(urlString: urlString)
-        }
-
-        private func startVLC(urlString: String) {
+        private func start(urlString: String) {
             reconnectWorkItem?.cancel()
             stopSnapshotLoop()
             player.stop()
@@ -129,6 +89,8 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
                 return
             }
 
+            // Favor stability on the dashcam's local Wi-Fi while keeping latency bounded.
+            // VLC chooses the transport automatically; forcing TCP was less reliable on this A500S.
             media.addOption(":network-caching=700")
             media.addOption(":live-caching=700")
             media.addOption(":clock-jitter=0")
@@ -145,7 +107,6 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
         }
 
         func mediaPlayerStateChanged(_ newState: VLCMediaPlayerState) {
-            guard !isRootlessRuntime else { return }
             switch newState {
             case .opening:
                 setStatus("70MAI OPENING")
@@ -176,7 +137,6 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
         }
 
         func mediaPlayerBufferingChanged(_ progress: Float) {
-            guard !isRootlessRuntime else { return }
             if progress >= 1 {
                 if player.state == .playing {
                     setStatus("70MAI PLAYING • ADAS ACTIVE")
@@ -196,7 +156,7 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
                 guard let self,
                       !self.stoppedByOwner,
                       let url = self.currentURL else { return }
-                self.startVLC(urlString: url)
+                self.start(urlString: url)
             }
             reconnectWorkItem = item
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
@@ -260,9 +220,6 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
             stoppedByOwner = true
             reconnectWorkItem?.cancel()
             stopSnapshotLoop()
-            nativeRTSPView?.stop()
-            nativeRTSPView?.removeFromSuperview()
-            nativeRTSPView = nil
             player.stop()
             player.drawable = nil
             currentURL = nil
