@@ -41,11 +41,15 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
         private var currentRestartToken: UUID?
         private weak var currentView: UIView?
         private var snapshotTimer: Timer?
+        private var watchdogTimer: Timer?
         private var reconnectWorkItem: DispatchWorkItem?
         private var snapshotInFlight = false
+        private var frameProcessing = false
         private var snapshotPath: String?
         private var snapshotCounter: UInt64 = 0
         private var stoppedByOwner = false
+        private var ownerRestartInProgress = false
+        private var lastFrameAt = ProcessInfo.processInfo.systemUptime
         private var consecutiveFailures = 0
 
         init(statusText: Binding<String>, frameProcessor: FrameProcessor) {
@@ -82,7 +86,9 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
 
         private func start(urlString: String) {
             reconnectWorkItem?.cancel()
+            reconnectWorkItem = nil
             stopSnapshotLoop()
+            ownerRestartInProgress = true
             player.stop()
             setStatus("70MAI CONNECTING")
 
@@ -92,11 +98,14 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
                 return
             }
 
-            // Favor stability on the dashcam's local Wi-Fi while keeping latency bounded.
-            // VLC chooses the transport automatically; forcing TCP was less reliable on this A500S.
-            media.addOption(":network-caching=700")
-            media.addOption(":live-caching=700")
+            // Keep the proven A500S VLC picture path, but discard late frames
+            // instead of allowing several seconds of latency to accumulate.
+            media.addOption(":network-caching=180")
+            media.addOption(":live-caching=180")
             media.addOption(":clock-jitter=0")
+            media.addOption(":clock-synchro=0")
+            media.addOption(":drop-late-frames")
+            media.addOption(":skip-frames")
 
             player.media = media
             if let currentView {
@@ -108,6 +117,7 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
                 guard let self, !self.stoppedByOwner else { return }
                 self.player.play()
                 self.applyFullscreenVideoAspect()
+                self.ownerRestartInProgress = false
             }
         }
 
@@ -127,6 +137,7 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
                 setStatus("70MAI OPENING")
             case .playing:
                 consecutiveFailures = 0
+                ownerRestartInProgress = false
                 applyFullscreenVideoAspect()
                 setStatus("70MAI PLAYING • ADAS ACTIVE")
                 startSnapshotLoop()
@@ -137,7 +148,7 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
                 setStatus("70MAI STOPPING")
             case .stopped:
                 stopSnapshotLoop()
-                if !stoppedByOwner {
+                if !stoppedByOwner && !ownerRestartInProgress {
                     scheduleReconnect(reason: "70MAI RECONNECTING")
                 }
             case .error:
@@ -163,6 +174,7 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
         }
 
         private func scheduleReconnect(reason: String) {
+            guard reconnectWorkItem == nil, !stoppedByOwner else { return }
             consecutiveFailures += 1
             let delay = min(5.0, 0.8 + Double(consecutiveFailures - 1) * 0.8)
             setStatus("\(reason) • \(String(format: "%.1fs", delay))")
@@ -172,6 +184,7 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
                 guard let self,
                       !self.stoppedByOwner,
                       let url = self.currentURL else { return }
+                self.reconnectWorkItem = nil
                 self.start(urlString: url)
             }
             reconnectWorkItem = item
@@ -180,8 +193,17 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
 
         private func startSnapshotLoop() {
             guard snapshotTimer == nil else { return }
-            snapshotTimer = Timer.scheduledTimer(withTimeInterval: 0.22, repeats: true) { [weak self] _ in
+            lastFrameAt = ProcessInfo.processInfo.systemUptime
+            snapshotTimer = Timer.scheduledTimer(withTimeInterval: 0.18, repeats: true) { [weak self] _ in
                 self?.requestSnapshot()
+            }
+            watchdogTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+                guard let self,
+                      self.player.state == .playing,
+                      !self.frameProcessing,
+                      ProcessInfo.processInfo.systemUptime - self.lastFrameAt > 2.4 else { return }
+                self.setStatus("70MAI VIDEO STALLED • RECOVERING")
+                self.scheduleReconnect(reason: "70MAI AUTO RECONNECT")
             }
             requestSnapshot()
         }
@@ -189,7 +211,10 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
         private func stopSnapshotLoop() {
             snapshotTimer?.invalidate()
             snapshotTimer = nil
+            watchdogTimer?.invalidate()
+            watchdogTimer = nil
             snapshotInFlight = false
+            frameProcessing = false
             if let snapshotPath {
                 try? FileManager.default.removeItem(atPath: snapshotPath)
             }
@@ -197,7 +222,9 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
         }
 
         private func requestSnapshot() {
-            guard player.state == .playing, !snapshotInFlight else { return }
+            guard player.state == .playing,
+                  !snapshotInFlight,
+                  !frameProcessing else { return }
             snapshotCounter &+= 1
             let path = FileManager.default.temporaryDirectory
                 .appendingPathComponent("xadas-70mai-\(snapshotCounter % 2).png")
@@ -205,7 +232,7 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
             try? FileManager.default.removeItem(atPath: path)
             snapshotPath = path
             snapshotInFlight = true
-            player.saveVideoSnapshot(at: path, withWidth: 640, andHeight: 360)
+            player.saveVideoSnapshot(at: path, withWidth: 960, andHeight: 540)
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
                 guard let self, self.snapshotInFlight else { return }
@@ -219,22 +246,29 @@ struct SeventyMaiPlayerView: UIViewRepresentable {
                 return
             }
             snapshotInFlight = false
+            snapshotPath = nil
+            frameProcessing = true
+            lastFrameAt = ProcessInfo.processInfo.systemUptime
             frameQueue.async { [weak self] in
                 guard let self,
                       let image = UIImage(contentsOfFile: path),
                       let cgImage = image.cgImage,
                       let pixelBuffer = Self.makePixelBuffer(from: cgImage) else {
                     try? FileManager.default.removeItem(atPath: path)
+                    DispatchQueue.main.async { [weak self] in self?.frameProcessing = false }
                     return
                 }
                 try? FileManager.default.removeItem(atPath: path)
                 self.frameProcessor.process(pixelBuffer: pixelBuffer)
+                DispatchQueue.main.async { [weak self] in self?.frameProcessing = false }
             }
         }
 
         func stop() {
             stoppedByOwner = true
+            ownerRestartInProgress = true
             reconnectWorkItem?.cancel()
+            reconnectWorkItem = nil
             stopSnapshotLoop()
             player.stop()
             player.drawable = nil
