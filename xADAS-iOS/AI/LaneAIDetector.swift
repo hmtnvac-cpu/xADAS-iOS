@@ -48,13 +48,9 @@ final class LaneAIDetector {
         try options.setIntraOpNumThreads(2)
         try options.setGraphOptimizationLevel(.all)
 
-        // Unsupported quantized operators automatically stay on CPU. Supported
-        // subgraphs can still use Apple's Core ML execution provider.
-        if ORTIsCoreMLExecutionProviderAvailable() {
-            let coreMLOptions = ORTCoreMLExecutionProviderOptions()
-            coreMLOptions.enableOnSubgraphs = true
-            try? options.appendCoreMLExecutionProvider(with: coreMLOptions)
-        }
+        // Keep this quantized UFLD graph on ONNX Runtime CPU.  Splitting it
+        // between Core ML and CPU can fail session creation on older/jailbroken
+        // devices even though the same model runs correctly on ORT CPU.
 
         session = try ORTSession(
             env: environment,
