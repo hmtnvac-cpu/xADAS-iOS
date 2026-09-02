@@ -177,3 +177,5 @@ jobs:
             ${{ runner.temp }}/deb-contents.txt
           if-no-files-found: ignore
           retention-days: 7
+
+# Trigger rebuild after SILEO_REPO_TOKEN configuration.
