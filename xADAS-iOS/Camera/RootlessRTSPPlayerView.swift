@@ -1,6 +1,8 @@
 import AVFoundation
 import CoreMedia
+import CoreImage
 import Foundation
+import Metal
 import Network
 import QuartzCore
 import SwiftUI
@@ -52,7 +54,12 @@ struct RootlessSeventyMaiPlayerView: UIViewRepresentable {
 }
 
 final class RootlessRTSPPlayerView: UIView {
-    private let displayLayer = AVSampleBufferDisplayLayer()
+    private let videoLayer = CAMetalLayer()
+    private let metalDevice: MTLDevice?
+    private let renderContext: CIContext?
+    private let renderQueue = DispatchQueue(label: "xadas.video.metal", qos: .userInteractive)
+    private let renderLock = NSLock()
+    private var renderBusy = false
 
     private let frameProcessor: FrameProcessor
     private let statusHandler: (String) -> Void
@@ -72,11 +79,18 @@ final class RootlessRTSPPlayerView: UIView {
     init(frameProcessor: FrameProcessor, statusHandler: @escaping (String) -> Void) {
         self.frameProcessor = frameProcessor
         self.statusHandler = statusHandler
+        let device = MTLCreateSystemDefaultDevice()
+        metalDevice = device
+        renderContext = device.map { CIContext(mtlDevice: $0, options: [.cacheIntermediates: false]) }
         super.init(frame: .zero)
         backgroundColor = .black
-        displayLayer.videoGravity = .resizeAspectFill
-        displayLayer.backgroundColor = UIColor.black.cgColor
-        layer.addSublayer(displayLayer)
+        videoLayer.device = device
+        videoLayer.pixelFormat = .bgra8Unorm
+        videoLayer.framebufferOnly = false
+        videoLayer.isOpaque = true
+        videoLayer.backgroundColor = UIColor.black.cgColor
+        videoLayer.contentsScale = UIScreen.main.scale
+        layer.addSublayer(videoLayer)
     }
 
     required init?(coder: NSCoder) { nil }
@@ -85,7 +99,11 @@ final class RootlessRTSPPlayerView: UIView {
         super.layoutSubviews()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        displayLayer.frame = bounds
+        videoLayer.frame = bounds
+        videoLayer.drawableSize = CGSize(
+            width: max(bounds.width * videoLayer.contentsScale, 1),
+            height: max(bounds.height * videoLayer.contentsScale, 1)
+        )
         CATransaction.commit()
     }
 
@@ -119,45 +137,54 @@ final class RootlessRTSPPlayerView: UIView {
         client = nil
         decoder.reset()
         DispatchQueue.main.async { [weak self] in
-            self?.displayLayer.flushAndRemoveImage()
+            self?.videoLayer.setNeedsDisplay()
         }
     }
 
     private func enqueue(pixelBuffer: CVPixelBuffer) {
-        var formatDescription: CMVideoFormatDescription?
-        guard CMVideoFormatDescriptionCreateForImageBuffer(
-            allocator: kCFAllocatorDefault,
-            imageBuffer: pixelBuffer,
-            formatDescriptionOut: &formatDescription
-        ) == noErr, let formatDescription else { return }
+        renderLock.lock()
+        guard !renderBusy else {
+            renderLock.unlock()
+            return
+        }
+        renderBusy = true
+        renderLock.unlock()
 
-        var timing = CMSampleTimingInfo(
-            duration: .invalid,
-            presentationTimeStamp: .invalid,
-            decodeTimeStamp: .invalid
-        )
-        var sampleBuffer: CMSampleBuffer?
-        guard CMSampleBufferCreateReadyWithImageBuffer(
-            allocator: kCFAllocatorDefault,
-            imageBuffer: pixelBuffer,
-            formatDescription: formatDescription,
-            sampleTiming: &timing,
-            sampleBufferOut: &sampleBuffer
-        ) == noErr, let sampleBuffer else { return }
-
-        CMSetAttachment(
-            sampleBuffer,
-            key: kCMSampleAttachmentKey_DisplayImmediately,
-            value: kCFBooleanTrue,
-            attachmentMode: kCMAttachmentMode_ShouldPropagate
-        )
-
-        DispatchQueue.main.async { [weak self] in
+        renderQueue.async { [weak self] in
             guard let self else { return }
-            if self.displayLayer.status == .failed {
-                self.displayLayer.flushAndRemoveImage()
+            defer {
+                self.renderLock.lock()
+                self.renderBusy = false
+                self.renderLock.unlock()
             }
-            self.displayLayer.enqueue(sampleBuffer)
+            guard let context = self.renderContext,
+                  let drawable = self.videoLayer.nextDrawable() else { return }
+
+            let destination = CGRect(
+                x: 0,
+                y: 0,
+                width: drawable.texture.width,
+                height: drawable.texture.height
+            )
+            let source = CIImage(cvPixelBuffer: pixelBuffer)
+            guard source.extent.width > 0, source.extent.height > 0 else { return }
+            let scale = max(
+                destination.width / source.extent.width,
+                destination.height / source.extent.height
+            )
+            let scaled = source.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            let centered = scaled.transformed(by: CGAffineTransform(
+                translationX: destination.midX - scaled.extent.midX,
+                y: destination.midY - scaled.extent.midY
+            ))
+            context.render(
+                centered,
+                to: drawable.texture,
+                commandBuffer: nil,
+                bounds: destination,
+                colorSpace: CGColorSpaceCreateDeviceRGB()
+            )
+            drawable.present()
         }
     }
 
