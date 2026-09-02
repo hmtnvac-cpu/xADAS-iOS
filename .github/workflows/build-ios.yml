@@ -1,4 +1,4 @@
-name: Build xADAS Rootless DEB
+name: Build iOS IPA
 
 on:
   workflow_dispatch:
@@ -8,7 +8,6 @@ on:
       - "xADAS-iOS/**"
       - "project.yml"
       - "scripts/download-model.sh"
-      - "scripts/package-rootless-deb.sh"
       - ".github/workflows/build-ios.yml"
 
 jobs:
@@ -23,9 +22,8 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
-      - name: Install build tools
-        run: |
-          brew install xcodegen dpkg ldid
+      - name: Install XcodeGen
+        run: brew install xcodegen
 
       - name: Download Core ML model
         run: bash scripts/download-model.sh
@@ -33,49 +31,20 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Resolve VLCKit dependencies with retry
+      - name: Verify deployment target before build
         run: |
           set -euo pipefail
-          for attempt in 1 2 3 4; do
-            echo "VLCKit dependency attempt $attempt/4"
-            if xcodebuild \
-              -project xADAS-iOS.xcodeproj \
-              -scheme xADAS-iOS \
-              -resolvePackageDependencies; then
-              echo "VLCKit dependencies resolved"
-              exit 0
-            fi
-            if [[ "$attempt" -lt 4 ]]; then
-              echo "Dependency download failed; waiting before retry..."
-              sleep $((attempt * 12))
-            fi
-          done
-          echo "VLCKit dependency resolution failed after 4 attempts" >&2
-          exit 1
-
-      - name: Verify deployment target
-        run: |
-          set -euo pipefail
-          SETTINGS=""
-          for attempt in 1 2 3; do
-            if SETTINGS=$(xcodebuild \
-              -project xADAS-iOS.xcodeproj \
-              -scheme xADAS-iOS \
-              -sdk iphoneos \
-              -destination 'generic/platform=iOS' \
-              -disableAutomaticPackageResolution \
-              -showBuildSettings); then
-              break
-            fi
-            echo "showBuildSettings attempt $attempt failed; retrying..."
-            sleep $((attempt * 8))
-          done
-          test -n "$SETTINGS"
+          SETTINGS=$(xcodebuild \
+            -project xADAS-iOS.xcodeproj \
+            -scheme xADAS-iOS \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -showBuildSettings)
           TARGET=$(printf '%s\n' "$SETTINGS" | awk '$1 == "IPHONEOS_DEPLOYMENT_TARGET" && $2 == "=" {print $3; exit}')
           echo "IPHONEOS_DEPLOYMENT_TARGET=$TARGET"
           test "$TARGET" = "16.0"
 
-      - name: Build device app
+      - name: Build unsigned device app
         run: |
           set -o pipefail
           xcodebuild \
@@ -84,14 +53,13 @@ jobs:
             -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
-            -disableAutomaticPackageResolution \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             build | tee "$RUNNER_TEMP/xcodebuild.log"
 
-      - name: Preflight app bundle
+      - name: Preflight built app bundle
         run: |
           set -euo pipefail
           APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/xADAS-iOS.app"
@@ -101,109 +69,42 @@ jobs:
           test -f "$INFO"
           test -f "$BIN"
           test -d "$APP_PATH/YOLOv3TinyInt8LUT.mlmodelc"
-          BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INFO")
-          DISPLAY_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$INFO")
-          MIN_OS=$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$INFO")
+          CAMERA_USAGE=$(/usr/libexec/PlistBuddy -c 'Print :NSCameraUsageDescription' "$INFO")
           LOCAL_NETWORK_USAGE=$(/usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' "$INFO")
-          echo "Bundle ID: $BUNDLE_ID"
-          echo "Display name: $DISPLAY_NAME"
+          MIN_OS=$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$INFO")
+          echo "Camera usage: $CAMERA_USAGE"
+          echo "Local network usage: $LOCAL_NETWORK_USAGE"
           echo "Minimum OS: $MIN_OS"
-          test "$BUNDLE_ID" = "com.hmtnvac.xadas.dev"
-          test "$DISPLAY_NAME" = "xADAS Dev"
-          test "$MIN_OS" = "16.0"
+          test -n "$CAMERA_USAGE"
           test -n "$LOCAL_NETWORK_USAGE"
+          test "$MIN_OS" = "16.0"
+          xcrun vtool -show-build "$BIN"
 
-      - name: Ad-hoc sign rootless app
+      - name: Package unsigned IPA
         run: |
           set -euo pipefail
           APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/xADAS-iOS.app"
-          while IFS= read -r -d '' FILE; do
-            if file "$FILE" | grep -q 'Mach-O'; then
-              echo "ldid signing: $FILE"
-              ldid -S "$FILE"
-            fi
-          done < <(find "$APP_PATH" -type f -print0)
-          ldid -e "$APP_PATH/xADAS-iOS" >/dev/null
+          mkdir -p "$RUNNER_TEMP/Payload"
+          cp -R "$APP_PATH" "$RUNNER_TEMP/Payload/"
+          cd "$RUNNER_TEMP"
+          /usr/bin/zip -qry xADAS-iOS-V0.9.0-unsigned.ipa Payload
+          shasum -a 256 xADAS-iOS-V0.9.0-unsigned.ipa > xADAS-iOS-V0.9.0-unsigned.sha256
 
-      - name: Package rootless Sileo DEB
-        run: |
-          set -euo pipefail
-          APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/xADAS-iOS.app"
-          VERSION="0.9.0~dev${GITHUB_RUN_NUMBER}"
-          OUT="$RUNNER_TEMP/xADAS-Dev_${VERSION}_iphoneos-arm64.deb"
-          bash scripts/package-rootless-deb.sh "$APP_PATH" "$OUT" "$VERSION"
-          shasum -a 256 "$OUT" > "$OUT.sha256"
-          echo "DEB_PATH=$OUT" >> "$GITHUB_ENV"
-          echo "DEB_SHA_PATH=$OUT.sha256" >> "$GITHUB_ENV"
-          echo "DEB_VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "DEB_FILENAME=$(basename "$OUT")" >> "$GITHUB_ENV"
-
-      - name: Verify DEB contents
-        run: |
-          set -euo pipefail
-          dpkg-deb -I "$DEB_PATH"
-          dpkg-deb -c "$DEB_PATH" | tee "$RUNNER_TEMP/deb-contents.txt"
-          dpkg-deb -c "$DEB_PATH" | grep -q './var/jb/Applications/xADAS.app/xADAS-iOS'
-
-      - name: Upload Sileo package artifact
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: xADAS-Dev-rootless-deb
+          name: xADAS-iOS-V0.9.0-unsigned
           path: |
-            ${{ env.DEB_PATH }}
-            ${{ env.DEB_SHA_PATH }}
+            ${{ runner.temp }}/xADAS-iOS-V0.9.0-unsigned.ipa
+            ${{ runner.temp }}/xADAS-iOS-V0.9.0-unsigned.sha256
           if-no-files-found: error
           retention-days: 14
-
-      - name: Publish DEB to xADAS Sileo repo
-        env:
-          SILEO_REPO_TOKEN: ${{ secrets.SILEO_REPO_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          if [[ -z "${SILEO_REPO_TOKEN:-}" ]]; then
-            echo "::notice::SILEO_REPO_TOKEN is not configured. DEB artifact was built, but automatic Sileo publishing was skipped."
-            exit 0
-          fi
-
-          REPO_DIR="$RUNNER_TEMP/xADAS-Sileo-Repo"
-          git clone "https://x-access-token:${SILEO_REPO_TOKEN}@github.com/hmtnvac-cpu/xADAS-Sileo-Repo.git" "$REPO_DIR"
-          cd "$REPO_DIR"
-
-          git config user.name "xADAS Build Bot"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          mkdir -p debs
-          rm -f debs/xADAS-Dev_*_iphoneos-arm64.deb
-          cp "$DEB_PATH" "debs/$DEB_FILENAME"
-
-          git add debs
-          if git diff --cached --quiet; then
-            echo "No Sileo package change to publish."
-            exit 0
-          fi
-
-          git commit -m "Publish xADAS Dev ${DEB_VERSION}"
-
-          for attempt in 1 2 3; do
-            if git push origin main; then
-              echo "Published $DEB_FILENAME to xADAS-Sileo-Repo/debs"
-              exit 0
-            fi
-            echo "Push attempt $attempt failed; rebasing and retrying..."
-            git pull --rebase origin main
-          done
-
-          echo "Failed to publish Sileo package after 3 attempts" >&2
-          exit 1
 
       - name: Upload build log on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: xadas-rootless-build-log
-          path: |
-            ${{ runner.temp }}/xcodebuild.log
-            ${{ runner.temp }}/deb-contents.txt
+          name: xcodebuild-log
+          path: ${{ runner.temp }}/xcodebuild.log
           if-no-files-found: ignore
           retention-days: 7
