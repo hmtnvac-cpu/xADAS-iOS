@@ -53,9 +53,19 @@ exit 0
 EOF
 
 chmod 0755 "$ROOT/DEBIAN/postinst" "$ROOT/DEBIAN/postrm"
+
+# Preserve executable bits from the built .app. Do not chmod every file to 0644:
+# embedded frameworks/dylibs contain Mach-O binaries that must remain executable.
 find "$ROOT/var/jb/Applications/xADAS.app" -type d -exec chmod 0755 {} +
-find "$ROOT/var/jb/Applications/xADAS.app" -type f -exec chmod 0644 {} +
 chmod 0755 "$ROOT/var/jb/Applications/xADAS.app/xADAS-iOS"
+
+# Sanity-check that every Mach-O binary inside the app is executable before packaging.
+while IFS= read -r -d '' FILE; do
+  if file "$FILE" | grep -q 'Mach-O'; then
+    chmod 0755 "$FILE"
+    test -x "$FILE"
+  fi
+done < <(find "$ROOT/var/jb/Applications/xADAS.app" -type f -print0)
 
 mkdir -p "$(dirname "$OUTPUT_DEB")"
 dpkg-deb --root-owner-group --build "$ROOT" "$OUTPUT_DEB"
