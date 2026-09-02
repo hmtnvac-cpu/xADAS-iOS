@@ -116,7 +116,11 @@ final class LaneAIDetector {
         guard confidence >= 0.52 else { return nil }
 
         let laneCenter = (leftX + rightX) / 2
-        let normalizedOffset = (0.5 - laneCenter) / (laneWidth / 2)
+        let savedCenter = UserDefaults.standard.double(
+            forKey: DistanceEstimator.cameraCenterXKey
+        )
+        let cameraCenter = savedCenter > 0.1 ? savedCenter : 0.5
+        let normalizedOffset = (cameraCenter - laneCenter) / (laneWidth / 2)
 
         return LaneDetection(
             leftPoints: left.points,
