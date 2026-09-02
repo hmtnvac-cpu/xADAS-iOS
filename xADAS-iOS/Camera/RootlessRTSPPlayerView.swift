@@ -29,9 +29,7 @@ final class RootlessRTSPPlayerView: UIView {
         displayLayer.videoGravity = .resizeAspectFill
     }
 
-    required init?(coder: NSCoder) {
-        nil
-    }
+    required init?(coder: NSCoder) { nil }
 
     func start(urlString: String) {
         stop()
@@ -115,12 +113,13 @@ private final class RTSPH264Client {
     private var cseq = 1
     private var pendingResponse: ((Int, [String: String], Data) -> Void)?
     private var sessionID: String?
-    private var playing = false
     private var stopped = false
 
     private var currentTimestamp: UInt32?
     private var accessUnit: [Data] = []
     private var fragmentedNAL: Data?
+    private var latestSPS: Data?
+    private var latestPPS: Data?
 
     init(
         url: URL,
@@ -166,22 +165,21 @@ private final class RTSPH264Client {
         stopped = true
         connection?.cancel()
         connection = nil
-        receiveBuffer.removeAll(keepingCapacity: false)
+        receiveBuffer.removeAll()
         pendingResponse = nil
-        playing = false
+        sessionID = nil
         currentTimestamp = nil
-        accessUnit.removeAll(keepingCapacity: false)
+        accessUnit.removeAll()
         fragmentedNAL = nil
+        latestSPS = nil
+        latestPPS = nil
     }
 
     private func describe() {
-        sendRequest(
-            method: "DESCRIBE",
-            target: url.absoluteString,
-            headers: ["Accept": "application/sdp"]
-        ) { [weak self] code, headers, body in
-            guard let self, code == 200 else {
-                self?.report("70MAI DESCRIBE FAILED")
+        sendRequest(method: "DESCRIBE", target: url.absoluteString, headers: ["Accept": "application/sdp"]) { [weak self] code, _, body in
+            guard let self else { return }
+            guard code == 200 else {
+                self.report("70MAI DESCRIBE FAILED • \(code)")
                 return
             }
             guard let sdp = String(data: body, encoding: .utf8),
@@ -200,12 +198,13 @@ private final class RTSPH264Client {
             target: trackURL,
             headers: ["Transport": "RTP/AVP/TCP;unicast;interleaved=0-1"]
         ) { [weak self] code, headers, _ in
-            guard let self, code == 200 else {
-                self?.report("70MAI SETUP TCP FAILED")
+            guard let self else { return }
+            guard code == 200 else {
+                self.report("70MAI SETUP FAILED • \(code)")
                 return
             }
-            if let rawSession = headers["session"] {
-                self.sessionID = rawSession.split(separator: ";", maxSplits: 1).first.map(String.init)
+            if let raw = headers["session"] {
+                self.sessionID = raw.split(separator: ";", maxSplits: 1).first.map(String.init)
             }
             self.play()
         }
@@ -215,11 +214,11 @@ private final class RTSPH264Client {
         var headers: [String: String] = [:]
         if let sessionID { headers["Session"] = sessionID }
         sendRequest(method: "PLAY", target: url.absoluteString, headers: headers) { [weak self] code, _, _ in
-            guard let self, code == 200 else {
-                self?.report("70MAI PLAY FAILED")
+            guard let self else { return }
+            guard code == 200 else {
+                self.report("70MAI PLAY FAILED • \(code)")
                 return
             }
-            self.playing = true
             self.report("70MAI PLAYING • NATIVE RTSP")
         }
     }
@@ -237,35 +236,29 @@ private final class RTSPH264Client {
             "User-Agent: xADAS-iOS/native-rtsp"
         ]
         cseq += 1
-        for (key, value) in headers {
-            lines.append("\(key): \(value)")
-        }
+        for (key, value) in headers { lines.append("\(key): \(value)") }
         lines.append("")
         lines.append("")
-        let request = lines.joined(separator: "\r\n")
         pendingResponse = completion
-        connection.send(content: request.data(using: .utf8), completion: .contentProcessed { [weak self] error in
-            if let error {
-                self?.report("70MAI RTSP SEND ERROR • \(error.localizedDescription)")
-            }
+        let data = lines.joined(separator: "\r\n").data(using: .utf8)
+        connection.send(content: data, completion: .contentProcessed { [weak self] error in
+            if let error { self?.report("70MAI SEND ERROR • \(error.localizedDescription)") }
         })
     }
 
     private func receiveLoop() {
         guard let connection, !stopped else { return }
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, complete, error in
             guard let self, !self.stopped else { return }
             if let data, !data.isEmpty {
                 self.receiveBuffer.append(data)
                 self.consumeBuffer()
             }
             if let error {
-                self.report("70MAI RTSP RECEIVE ERROR • \(error.localizedDescription)")
+                self.report("70MAI RECEIVE ERROR • \(error.localizedDescription)")
                 return
             }
-            if !isComplete {
-                self.receiveLoop()
-            }
+            if !complete { self.receiveLoop() }
         }
     }
 
@@ -276,35 +269,29 @@ private final class RTSPH264Client {
                 let channel = receiveBuffer[1]
                 let length = (Int(receiveBuffer[2]) << 8) | Int(receiveBuffer[3])
                 guard receiveBuffer.count >= 4 + length else { return }
-                let payload = Data(receiveBuffer[4..<(4 + length)])
+                let packet = Data(receiveBuffer[4..<(4 + length)])
                 receiveBuffer.removeSubrange(0..<(4 + length))
-                if channel == 0 {
-                    consumeRTP(payload)
-                }
+                if channel == 0 { consumeRTP(packet) }
                 continue
             }
 
             guard let headerRange = receiveBuffer.range(of: Data("\r\n\r\n".utf8)) else { return }
             let headerEnd = headerRange.upperBound
-            guard let headerText = String(data: receiveBuffer[..<headerEnd], encoding: .utf8) else {
+            guard let text = String(data: receiveBuffer[..<headerEnd], encoding: .utf8) else {
                 receiveBuffer.removeAll()
                 return
             }
-            let contentLength = parseHeaders(headerText)["content-length"].flatMap(Int.init) ?? 0
+            let headers = parseHeaders(text)
+            let contentLength = headers["content-length"].flatMap(Int.init) ?? 0
             guard receiveBuffer.count >= headerEnd + contentLength else { return }
             let body = Data(receiveBuffer[headerEnd..<(headerEnd + contentLength)])
             receiveBuffer.removeSubrange(0..<(headerEnd + contentLength))
 
-            let lines = headerText.components(separatedBy: "\r\n")
-            let statusCode = lines.first?
-                .split(separator: " ")
-                .dropFirst()
-                .first
-                .flatMap { Int($0) } ?? 0
-            let headers = parseHeaders(headerText)
+            let code = text.components(separatedBy: "\r\n").first?
+                .split(separator: " ").dropFirst().first.flatMap { Int($0) } ?? 0
             let completion = pendingResponse
             pendingResponse = nil
-            completion?(statusCode, headers, body)
+            completion?(code, headers, body)
         }
     }
 
@@ -321,16 +308,12 @@ private final class RTSPH264Client {
 
     private func videoTrackURL(from sdp: String) -> String? {
         var inVideo = false
-        for rawLine in sdp.components(separatedBy: .newlines) {
-            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            if line.hasPrefix("m=") {
-                inVideo = line.hasPrefix("m=video")
-            }
+        for raw in sdp.components(separatedBy: .newlines) {
+            let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.hasPrefix("m=") { inVideo = line.hasPrefix("m=video") }
             guard inVideo, line.hasPrefix("a=control:") else { continue }
             let control = String(line.dropFirst("a=control:".count))
-            if control.lowercased().hasPrefix("rtsp://") {
-                return control
-            }
+            if control.lowercased().hasPrefix("rtsp://") { return control }
             let base = url.absoluteString.hasSuffix("/") ? url.absoluteString : url.absoluteString + "/"
             return URL(string: control, relativeTo: URL(string: base))?.absoluteString ?? base + control
         }
@@ -345,6 +328,8 @@ private final class RTSPH264Client {
         guard parts.count == 2,
               let sps = Data(base64Encoded: String(parts[0])),
               let pps = Data(base64Encoded: String(parts[1])) else { return }
+        latestSPS = sps
+        latestPPS = pps
         parameterSetHandler(sps, pps)
     }
 
@@ -355,10 +340,7 @@ private final class RTSPH264Client {
         let cc = Int(first & 0x0F)
         let hasExtension = (first & 0x10) != 0
         let marker = (second & 0x80) != 0
-        let timestamp = UInt32(packet[4]) << 24 |
-            UInt32(packet[5]) << 16 |
-            UInt32(packet[6]) << 8 |
-            UInt32(packet[7])
+        let timestamp = UInt32(packet[4]) << 24 | UInt32(packet[5]) << 16 | UInt32(packet[6]) << 8 | UInt32(packet[7])
 
         var offset = 12 + cc * 4
         guard packet.count >= offset else { return }
@@ -370,42 +352,31 @@ private final class RTSPH264Client {
         }
         guard offset < packet.count else { return }
 
-        if currentTimestamp != nil, currentTimestamp != timestamp, !accessUnit.isEmpty {
-            flushAccessUnit()
-        }
+        if currentTimestamp != nil, currentTimestamp != timestamp, !accessUnit.isEmpty { flushAccessUnit() }
         currentTimestamp = timestamp
 
         let payload = Data(packet[offset...])
         guard let firstPayload = payload.first else { return }
-        let nalType = firstPayload & 0x1F
-
-        switch nalType {
-        case 1...23:
-            appendNAL(payload)
-        case 24:
-            consumeSTAPA(payload)
-        case 28:
-            consumeFUA(payload)
-        default:
-            break
+        switch firstPayload & 0x1F {
+        case 1...23: appendNAL(payload)
+        case 24: consumeSTAPA(payload)
+        case 28: consumeFUA(payload)
+        default: break
         }
-
-        if marker {
-            flushAccessUnit()
-        }
+        if marker { flushAccessUnit() }
     }
 
     private func appendNAL(_ nal: Data) {
-        guard !nal.isEmpty else { return }
-        let type = nal[0] & 0x1F
-        if type == 7 {
-            if let pps = accessUnit.first(where: { !$0.isEmpty && ($0[0] & 0x1F) == 8 }) {
-                parameterSetHandler(nal, pps)
-            }
-        } else if type == 8 {
-            if let sps = accessUnit.first(where: { !$0.isEmpty && ($0[0] & 0x1F) == 7 }) {
-                parameterSetHandler(sps, nal)
-            }
+        guard let first = nal.first else { return }
+        switch first & 0x1F {
+        case 7:
+            latestSPS = nal
+            if let latestPPS { parameterSetHandler(nal, latestPPS) }
+        case 8:
+            latestPPS = nal
+            if let latestSPS { parameterSetHandler(latestSPS, nal) }
+        default:
+            break
         }
         accessUnit.append(nal)
     }
@@ -428,14 +399,12 @@ private final class RTSPH264Client {
         let start = (header & 0x80) != 0
         let end = (header & 0x40) != 0
         let reconstructed = (indicator & 0xE0) | (header & 0x1F)
-
         if start {
             fragmentedNAL = Data([reconstructed])
             fragmentedNAL?.append(payload.dropFirst(2))
         } else {
             fragmentedNAL?.append(payload.dropFirst(2))
         }
-
         if end, let nal = fragmentedNAL {
             fragmentedNAL = nil
             appendNAL(nal)
@@ -443,10 +412,7 @@ private final class RTSPH264Client {
     }
 
     private func flushAccessUnit() {
-        guard !accessUnit.isEmpty else {
-            currentTimestamp = nil
-            return
-        }
+        guard !accessUnit.isEmpty else { currentTimestamp = nil; return }
         let nals = accessUnit
         accessUnit.removeAll(keepingCapacity: true)
         currentTimestamp = nil
@@ -454,9 +420,7 @@ private final class RTSPH264Client {
     }
 
     private func report(_ text: String) {
-        DispatchQueue.main.async { [statusHandler] in
-            statusHandler(text)
-        }
+        DispatchQueue.main.async { [statusHandler] in statusHandler(text) }
     }
 }
 
@@ -468,9 +432,7 @@ private final class H264VideoDecoder {
     private var sps: Data?
     private var pps: Data?
 
-    init(output: @escaping (CVPixelBuffer) -> Void) {
-        self.output = output
-    }
+    init(output: @escaping (CVPixelBuffer) -> Void) { self.output = output }
 
     func setParameterSets(sps: Data, pps: Data) {
         queue.async { [weak self] in
@@ -483,16 +445,12 @@ private final class H264VideoDecoder {
     }
 
     func decode(accessUnit: [Data]) {
-        queue.async { [weak self] in
-            self?.decodeOnQueue(accessUnit)
-        }
+        queue.async { [weak self] in self?.decodeOnQueue(accessUnit) }
     }
 
     func reset() {
         queue.sync {
-            if let session {
-                VTDecompressionSessionInvalidate(session)
-            }
+            if let session { VTDecompressionSessionInvalidate(session) }
             session = nil
             formatDescription = nil
             sps = nil
@@ -508,9 +466,7 @@ private final class H264VideoDecoder {
             default: break
             }
         }
-        if session == nil, sps != nil, pps != nil {
-            rebuildSession()
-        }
+        if session == nil, sps != nil, pps != nil { rebuildSession() }
         guard let session, let formatDescription else { return }
 
         let videoNALs = accessUnit.filter {
@@ -540,16 +496,11 @@ private final class H264VideoDecoder {
             blockBufferOut: &blockBuffer
         ) == kCMBlockBufferNoErr, let blockBuffer else { return }
 
-        let copyStatus = sampleData.withUnsafeBytes { rawBuffer -> OSStatus in
-            guard let baseAddress = rawBuffer.baseAddress else { return -1 }
-            return CMBlockBufferReplaceDataBytes(
-                with: baseAddress,
-                blockBuffer: blockBuffer,
-                offsetIntoDestination: 0,
-                dataLength: sampleData.count
-            )
+        let copyStatus = sampleData.withUnsafeBytes { raw -> OSStatus in
+            guard let base = raw.baseAddress else { return -1 }
+            return CMBlockBufferReplaceDataBytes(with: base, blockBuffer: blockBuffer, offsetIntoDestination: 0, dataLength: sampleData.count)
         }
-        guard copyStatus == kCMBlockBufferNoErr else { return }
+        guard copyStatus == noErr else { return }
 
         var sampleBuffer: CMSampleBuffer?
         var sampleSize = sampleData.count
@@ -599,7 +550,7 @@ private final class H264VideoDecoder {
                 )
             }
         }
-        guard status == noErr, let videoDescription = description as? CMVideoFormatDescription else { return }
+        guard status == noErr, let videoDescription = description else { return }
         formatDescription = videoDescription
 
         let pixelAttributes: [CFString: Any] = [
@@ -609,9 +560,7 @@ private final class H264VideoDecoder {
 
         var callback = VTDecompressionOutputCallbackRecord(
             decompressionOutputCallback: { refCon, _, status, _, imageBuffer, _, _ in
-                guard status == noErr,
-                      let refCon,
-                      let imageBuffer else { return }
+                guard status == noErr, let refCon, let imageBuffer else { return }
                 let decoder = Unmanaged<H264VideoDecoder>.fromOpaque(refCon).takeUnretainedValue()
                 decoder.output(imageBuffer)
             },
