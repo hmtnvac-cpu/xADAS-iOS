@@ -6,6 +6,7 @@ struct SettingsView: View {
     @State private var showDebugHUD = true
     @AppStorage(CameraSource.selectionKey) private var cameraSourceRaw = CameraSourceChoice.seventyMai.rawValue
     @AppStorage(ADASWarningManager.volumeKey) private var warningVolume: Double = 0.35
+    @AppStorage(ADASWarningManager.vibrationKey) private var warningVibration = true
     @AppStorage(LeadDistanceTracker.referenceDistanceKey) private var referenceDistance: Double = 55
     @AppStorage(DistanceEstimator.cameraHeightKey) private var cameraHeight: Double = 1.25
     @StateObject private var rtspProbe = RTSPProbe()
@@ -52,6 +53,8 @@ struct SettingsView: View {
                         Text("Warning volume: \(Int(warningVolume * 100))%")
                         Slider(value: $warningVolume, in: 0...1, step: 0.05)
                     }
+
+                    Toggle("Warning vibration", isOn: $warningVibration)
 
                     Button("TEST WARNING SOUND + VOICE") {
                         warningManager.testWarning()
