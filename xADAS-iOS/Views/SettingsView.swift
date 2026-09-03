@@ -4,6 +4,8 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showRoadGuide = true
     @State private var showDebugHUD = true
+    @AppStorage(CameraSource.selectionKey) private var cameraSourceRaw = CameraSourceChoice.seventyMai.rawValue
+    @AppStorage(ADASWarningManager.volumeKey) private var warningVolume: Double = 0.35
     @AppStorage(LeadDistanceTracker.referenceDistanceKey) private var referenceDistance: Double = 55
     @AppStorage(DistanceEstimator.cameraHeightKey) private var cameraHeight: Double = 1.25
     @StateObject private var rtspProbe = RTSPProbe()
@@ -14,39 +16,48 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("70mai A500S") {
-                    LabeledContent("Camera source", value: "70mai only")
-                    LabeledContent("RTSP URL", value: "192.168.0.1/00000000")
-
-                    Button("TEST 70MAI RTSP") {
-                        rtspProbe.probe(urlString: seventyMaiURL)
+                Section("Camera") {
+                    Picker("Camera source", selection: $cameraSourceRaw) {
+                        ForEach(CameraSourceChoice.allCases) { source in
+                            Text(source.title).tag(source.rawValue)
+                        }
                     }
+                    .pickerStyle(.segmented)
 
-                    HStack {
-                        Circle()
-                            .fill(rtspProbe.isReachable ? Color.green : Color.orange)
-                            .frame(width: 9, height: 9)
-                        Text(rtspProbe.status)
-                            .font(.footnote.monospaced())
+                    if cameraSourceRaw == CameraSourceChoice.seventyMai.rawValue {
+                        LabeledContent("RTSP URL", value: "192.168.0.1/00000000")
+                        Button("TEST 70MAI RTSP") {
+                            rtspProbe.probe(urlString: seventyMaiURL)
+                        }
+                        HStack {
+                            Circle()
+                                .fill(rtspProbe.isReachable ? Color.green : Color.orange)
+                                .frame(width: 9, height: 9)
+                            Text(rtspProbe.status)
+                                .font(.footnote.monospaced())
+                        }
+                    } else {
+                        Text("iPhone rear camera is available for development and roadside testing when the 70mai hotspot is not connected.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
-
-                    Text("The RTSP source is fixed to the URL confirmed working on the A500S. xADAS does not send record, album or configuration commands to the dashcam.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
                 }
 
                 Section("ADAS") {
                     LabeledContent("Vehicle / lead", value: "Enabled")
-                    LabeledContent("Lead distance", value: "Enabled")
-                    LabeledContent("Lane / LDW", value: "UFLD V2 AI enabled")
-                    LabeledContent("Distance warning", value: "Beep + voice + vibration")
+                    LabeledContent("Lead distance", value: "Lane-gated")
+                    LabeledContent("Lane / LDW", value: "UFLD V2 AI")
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Warning volume: \(Int(warningVolume * 100))%")
+                        Slider(value: $warningVolume, in: 0...1, step: 0.05)
+                    }
+
                     Button("TEST WARNING SOUND + VOICE") {
                         warningManager.testWarning()
                     }
-                    Text("Distance and lane warnings use the iPhone system media volume without lowering music.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    Text("Re-run CALIBRATE after switching from the iPhone camera to the fixed 70mai camera so distance and horizon match the dashcam mounting position.")
+
+                    Text("xADAS warning volume is independent from the app logic, while iPhone media volume remains the final system output level.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -60,7 +71,7 @@ struct SettingsView: View {
                         Text("Reference distance: \(Int(referenceDistance)) m")
                         Slider(value: $referenceDistance, in: 20...120, step: 5)
                     }
-                    Text("The prototype uses this manual reference threshold for caution/danger classification.")
+                    Text("Re-run CALIBRATE after changing camera source because camera height, FOV and horizon differ between the iPhone and 70mai.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -71,10 +82,9 @@ struct SettingsView: View {
                 }
 
                 Section("Build") {
-                    LabeledContent("Version", value: "0.9.5")
+                    LabeledContent("Version", value: "0.9.8+")
                     LabeledContent("Minimum iOS", value: "16.0")
-                    LabeledContent("Video source", value: "70mai A500S RTSP only")
-                    LabeledContent("RTSP", value: "Low-cache VLC + watchdog")
+                    LabeledContent("Video source", value: "70mai / iPhone selectable")
                     LabeledContent("Lane model", value: "UFLD V2 • on-device")
                 }
             }
