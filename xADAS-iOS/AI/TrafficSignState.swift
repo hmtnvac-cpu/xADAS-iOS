@@ -1,15 +1,14 @@
 import Foundation
 
-/// Phase-1 Vietnamese traffic-sign state for passenger cars (<= 7 seats).
-/// Recognition is intentionally limited to explicit speed-limit signs and
-/// R.420/R.421 dense-population-area signs. Road-type inference comes later.
+/// Vietnamese phase-1 sign state for passenger cars (<= 7 seats).
+/// Only explicit speed-limit signs and dense-area start/end signs are used.
 enum DenseAreaState: String, Equatable {
     case unknown
     case inside
     case outside
 }
 
-enum TrafficSignKind: Equatable {
+enum TrafficSignKind: Hashable {
     case speedLimit(Int)
     case denseAreaStart   // R.420
     case denseAreaEnd     // R.421
@@ -29,48 +28,68 @@ struct TrafficSignState: Equatable {
     var updatedAt: TimeInterval = 0
 
     var speedLabel: String {
-        explicitSpeedLimitKPH.map { "SPEED LIMIT • \($0)" } ?? "SPEED LIMIT • --"
+        explicitSpeedLimitKPH.map { "LIMIT \($0)" } ?? "LIMIT --"
     }
 
     var areaLabel: String {
         switch denseArea {
-        case .inside: return "AREA • DENSE"
-        case .outside: return "AREA • OUTSIDE"
-        case .unknown: return "AREA • UNKNOWN"
+        case .inside: return "DENSE"
+        case .outside: return "OUTSIDE"
+        case .unknown: return "AREA --"
         }
     }
 }
 
-/// Temporal confirmation prevents one-frame false positives from changing the
-/// legal-state display. A sign must be seen repeatedly in a short time window.
+/// Each sign candidate has its own temporal confirmation counter so a speed
+/// sign and an area sign can be recognized at the same time without resetting
+/// one another. This is important on gantries and clustered roadside signs.
 final class TrafficSignStateTracker {
     private(set) var state = TrafficSignState()
-    private var candidate: TrafficSignKind?
-    private var candidateHits = 0
-    private var candidateFirstSeen: TimeInterval = 0
 
-    private let minimumConfidence: Float = 0.72
+    private struct Candidate {
+        var hits: Int
+        var firstSeen: TimeInterval
+        var lastSeen: TimeInterval
+        var bestConfidence: Float
+    }
+
+    private var candidates: [TrafficSignKind: Candidate] = [:]
+    private let minimumConfidence: Float = 0.70
     private let requiredHits = 3
-    private let confirmationWindow: TimeInterval = 1.2
+    private let confirmationWindow: TimeInterval = 1.35
 
     func ingest(_ observation: TrafficSignObservation) -> TrafficSignState {
         guard observation.confidence >= minimumConfidence else { return state }
 
-        if candidate == observation.kind,
-           observation.timestamp - candidateFirstSeen <= confirmationWindow {
-            candidateHits += 1
-        } else {
-            candidate = observation.kind
-            candidateHits = 1
-            candidateFirstSeen = observation.timestamp
+        candidates = candidates.filter {
+            observation.timestamp - $0.value.lastSeen <= confirmationWindow
         }
 
-        guard candidateHits >= requiredHits else { return state }
+        var candidate = candidates[observation.kind] ?? Candidate(
+            hits: 0,
+            firstSeen: observation.timestamp,
+            lastSeen: observation.timestamp,
+            bestConfidence: observation.confidence
+        )
+
+        if observation.timestamp - candidate.firstSeen > confirmationWindow {
+            candidate = Candidate(
+                hits: 0,
+                firstSeen: observation.timestamp,
+                lastSeen: observation.timestamp,
+                bestConfidence: observation.confidence
+            )
+        }
+
+        candidate.hits += 1
+        candidate.lastSeen = observation.timestamp
+        candidate.bestConfidence = max(candidate.bestConfidence, observation.confidence)
+        candidates[observation.kind] = candidate
+
+        guard candidate.hits >= requiredHits else { return state }
 
         switch observation.kind {
         case .speedLimit(let value):
-            // Phase 1 only accepts plausible explicit P.127 values. This is
-            // recognition state, not road-type-derived legal inference.
             guard (20...120).contains(value), value % 10 == 0 else { return state }
             state.explicitSpeedLimitKPH = value
         case .denseAreaStart:
@@ -80,10 +99,9 @@ final class TrafficSignStateTracker {
         }
 
         state.lastConfirmedSign = observation.kind
-        state.confidence = observation.confidence
+        state.confidence = candidate.bestConfidence
         state.updatedAt = observation.timestamp
-        candidateHits = 0
-        candidate = nil
+        candidates[observation.kind] = nil
         return state
     }
 }
