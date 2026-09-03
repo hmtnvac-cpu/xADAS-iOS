@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ADASOverlayView: View {
     let isCameraRunning: Bool
+    let cameraName: String
     let fps: Double
     let pipelineStatus: String
     let detectorStatus: String
@@ -91,7 +92,7 @@ struct ADASOverlayView: View {
     }
 
     private var cameraLabel: String {
-        if isCameraRunning { return "70MAI" }
+        if isCameraRunning { return cameraName.uppercased() }
         if pipelineStatus.contains("NO RTP") { return "NO RTP" }
         if pipelineStatus.contains("RTP RECEIVING") { return "DECODING" }
         if pipelineStatus.contains("WAITING RTP") { return "WAITING RTP" }
@@ -151,17 +152,6 @@ struct ADASOverlayView: View {
         .position(x: rect.midX, y: rect.midY)
     }
 
-    private func labelText(for detection: VehicleDetection) -> String {
-        let confidence = Int(detection.confidence * 100)
-        if detection.isLead {
-            if let distance = detection.distanceMeters {
-                return String(format: "LEAD • %.1f m • %@ %d%%", distance, detection.label.uppercased(), confidence)
-            }
-            return "LEAD • \(detection.label.uppercased()) \(confidence)%"
-        }
-        return "\(detection.label.uppercased()) \(confidence)%"
-    }
-
     private func displayRect(for normalized: CGRect, in size: CGSize) -> CGRect {
         CGRect(
             x: normalized.minX * size.width,
@@ -173,55 +163,65 @@ struct ADASOverlayView: View {
 
     private func laneOverlay(_ lane: LaneDetection, in size: CGSize) -> some View {
         Canvas { context, canvasSize in
-            var left = Path()
-            var right = Path()
-
-            for (index, point) in lane.leftPoints.enumerated() {
-                let p = CGPoint(x: point.x * canvasSize.width, y: point.y * canvasSize.height)
-                if index == 0 { left.move(to: p) } else { left.addLine(to: p) }
-            }
-
-            for (index, point) in lane.rightPoints.enumerated() {
-                let p = CGPoint(x: point.x * canvasSize.width, y: point.y * canvasSize.height)
-                if index == 0 { right.move(to: p) } else { right.addLine(to: p) }
-            }
+            let leftPoints = stabilizedLanePoints(lane.leftPoints)
+            let rightPoints = stabilizedLanePoints(lane.rightPoints)
+            let left = smoothPath(leftPoints, in: canvasSize)
+            let right = smoothPath(rightPoints, in: canvasSize)
 
             let leftWarning = laneDepartureState == .warningLeft
             let rightWarning = laneDepartureState == .warningRight
             let leftColor: Color = leftWarning ? .red : .cyan
             let rightColor: Color = rightWarning ? .red : .cyan
 
-            context.stroke(left, with: .color(leftColor.opacity(0.24)), lineWidth: leftWarning ? 9 : 6)
-            context.stroke(right, with: .color(rightColor.opacity(0.24)), lineWidth: rightWarning ? 9 : 6)
-            context.stroke(left, with: .color(leftColor), lineWidth: leftWarning ? 5 : 3)
-            context.stroke(right, with: .color(rightColor), lineWidth: rightWarning ? 5 : 3)
+            context.stroke(left, with: .color(leftColor.opacity(0.22)), lineWidth: leftWarning ? 8 : 5)
+            context.stroke(right, with: .color(rightColor.opacity(0.22)), lineWidth: rightWarning ? 8 : 5)
+            context.stroke(left, with: .color(leftColor), lineWidth: leftWarning ? 4 : 2.5)
+            context.stroke(right, with: .color(rightColor), lineWidth: rightWarning ? 4 : 2.5)
         }
     }
 
-    private func roadGuide(in size: CGSize) -> some View {
-        Canvas { context, canvasSize in
-            let centerX = canvasSize.width / 2
-            let savedHorizon = min(max(horizonRatio, 0.20), 0.75)
-            let clampedHorizon = min(max(savedHorizon + 0.12, 0.46), 0.68)
-            let horizonY = canvasSize.height * clampedHorizon
-            let bottomY = canvasSize.height * 0.92
+    /// UFLD returns discrete row anchors. Drawing those raw points directly
+    /// produced the saw-tooth/zig-zag lane seen on the real 70mai screen.
+    /// Smooth x over nearby anchors and reject isolated large jumps.
+    private func stabilizedLanePoints(_ input: [CGPoint]) -> [CGPoint] {
+        let sorted = input.sorted { $0.y < $1.y }
+        guard sorted.count >= 5 else { return sorted }
 
-            var left = Path()
-            left.move(to: CGPoint(x: centerX - canvasSize.width * 0.05, y: horizonY))
-            left.addLine(to: CGPoint(x: centerX - canvasSize.width * 0.25, y: bottomY))
-
-            var right = Path()
-            right.move(to: CGPoint(x: centerX + canvasSize.width * 0.05, y: horizonY))
-            right.addLine(to: CGPoint(x: centerX + canvasSize.width * 0.25, y: bottomY))
-
-            context.stroke(left, with: .color(.green.opacity(0.82)), lineWidth: 3)
-            context.stroke(right, with: .color(.green.opacity(0.82)), lineWidth: 3)
-
-            let horizon = Path { path in
-                path.move(to: CGPoint(x: centerX - 45, y: horizonY))
-                path.addLine(to: CGPoint(x: centerX + 45, y: horizonY))
-            }
-            context.stroke(horizon, with: .color(.white.opacity(0.55)), style: StrokeStyle(lineWidth: 1, dash: [6, 6]))
+        var averaged: [CGPoint] = []
+        for index in sorted.indices {
+            let lower = max(sorted.startIndex, index - 2)
+            let upper = min(sorted.index(before: sorted.endIndex), index + 2)
+            let window = sorted[lower...upper]
+            let x = window.reduce(0.0) { $0 + Double($1.x) } / Double(window.count)
+            averaged.append(CGPoint(x: x, y: sorted[index].y))
         }
+
+        var filtered: [CGPoint] = []
+        for point in averaged {
+            if let previous = filtered.last {
+                let dy = max(0.01, abs(point.y - previous.y))
+                let maxJump = 0.035 + dy * 0.75
+                if abs(point.x - previous.x) > maxJump { continue }
+            }
+            filtered.append(point)
+        }
+        return filtered.count >= 5 ? filtered : averaged
+    }
+
+    private func smoothPath(_ points: [CGPoint], in size: CGSize) -> Path {
+        var path = Path()
+        guard let first = points.first else { return path }
+        let mapped = points.map { CGPoint(x: $0.x * size.width, y: $0.y * size.height) }
+        path.move(to: CGPoint(x: first.x * size.width, y: first.y * size.height))
+        guard mapped.count > 1 else { return path }
+
+        for index in 1..<mapped.count {
+            let previous = mapped[index - 1]
+            let current = mapped[index]
+            let midpoint = CGPoint(x: (previous.x + current.x) / 2, y: (previous.y + current.y) / 2)
+            path.addQuadCurve(to: midpoint, control: previous)
+        }
+        if let last = mapped.last { path.addLine(to: last) }
+        return path
     }
 }
