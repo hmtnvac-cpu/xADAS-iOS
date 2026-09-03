@@ -32,8 +32,6 @@ final class FrameProcessor: ObservableObject {
     private var signFrameCounter = 0
     private let inferenceStride = 2
     private let laneStride = 2
-    // Sign recognition must run often enough for a moving car to get at least
-    // two confirmations before the roadside sign leaves the frame.
     private let signStride = 4
     private var lastVehicleSeenAt: TimeInterval = 0
     private var lastLaneSeenAt: TimeInterval = 0
@@ -42,7 +40,7 @@ final class FrameProcessor: ObservableObject {
     private let leadDistanceTracker = LeadDistanceTracker()
     private let laneDetector: LaneAIDetector?
     private let laneDepartureMonitor = LaneDepartureMonitor()
-    private let trafficSignDetector = TrafficSignDetector()
+    private let trafficSignDetector = HybridTrafficSignDetector()
     private let trafficSignTracker = TrafficSignStateTracker()
     private var latestLaneDetection: LaneDetection?
 
@@ -62,6 +60,8 @@ final class FrameProcessor: ObservableObject {
             laneDetector = nil
             laneStatus = error.localizedDescription
         }
+
+        trafficSignStatus = trafficSignDetector.modeLabel
     }
 
     func process(sampleBuffer: CMSampleBuffer) {
@@ -141,7 +141,7 @@ final class FrameProcessor: ObservableObject {
                 newTrafficSignState = state
 
                 if observations.isEmpty {
-                    newTrafficSignStatus = "SIGN AI • SEARCH"
+                    newTrafficSignStatus = "\(trafficSignDetector.modeLabel) • SEARCH"
                 } else {
                     let summary = observations.map { observation -> String in
                         switch observation.kind {
@@ -150,7 +150,7 @@ final class FrameProcessor: ObservableObject {
                         case .denseAreaEnd: return "R421"
                         }
                     }.joined(separator: " + ")
-                    newTrafficSignStatus = "SIGN AI • \(summary)"
+                    newTrafficSignStatus = "\(trafficSignDetector.modeLabel) • \(summary)"
                 }
             } catch {
                 newTrafficSignStatus = "SIGN AI ERROR: \(error.localizedDescription)"
