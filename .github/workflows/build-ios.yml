@@ -9,6 +9,7 @@ on:
       - "project.yml"
       - "scripts/download-model.sh"
       - "scripts/download-lane-model.sh"
+      - "scripts/download-vtsr-model.sh"
       - "scripts/extract-ufldv2-model.py"
       - "scripts/quantize-ufldv2-model.py"
       - ".github/workflows/build-ios.yml"
@@ -46,6 +47,17 @@ jobs:
         run: |
           python3 -m pip install --disable-pip-version-check onnx==1.17.0 onnxruntime==1.20.1
           bash scripts/download-lane-model.sh
+
+      - name: Cache Vietnam traffic sign model
+        uses: actions/cache@v4
+        with:
+          path: |
+            xADAS-iOS/Models/VTSRInt8.onnx
+            xADAS-iOS/Models/VTSRLabelMapping.json
+          key: vtsr-int8-v1
+
+      - name: Prepare Vietnam traffic sign model
+        run: bash scripts/download-vtsr-model.sh
 
       - name: Generate Xcode project
         run: xcodegen generate
@@ -100,6 +112,8 @@ jobs:
           test -f "$BIN"
           test -d "$APP_PATH/YOLOv3TinyInt8LUT.mlmodelc"
           test -f "$APP_PATH/UFLDv2TuSimpleRes18Int8.onnx"
+          test -f "$APP_PATH/VTSRInt8.onnx"
+          test -f "$APP_PATH/VTSRLabelMapping.json"
           CAMERA_USAGE=$(/usr/libexec/PlistBuddy -c 'Print :NSCameraUsageDescription' "$INFO")
           LOCAL_NETWORK_USAGE=$(/usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' "$INFO")
           MIN_OS=$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$INFO")
