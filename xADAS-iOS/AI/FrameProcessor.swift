@@ -20,18 +20,21 @@ final class FrameProcessor: ObservableObject {
     @Published private(set) var laneDetection: LaneDetection?
     @Published private(set) var laneDepartureState: LaneDepartureState = .unavailable
     @Published private(set) var laneStatus = "LANE MODEL LOADING"
+    @Published private(set) var trafficSignState = TrafficSignState()
+    @Published private(set) var trafficSignStatus = "SIGN AI READY"
 
     var horizontalFieldOfViewDegrees: Double = 0
 
     private var totalFrames: UInt64 = 0
     private var lastPublishedAt = ProcessInfo.processInfo.systemUptime
     private var inferenceFrameCounter = 0
-    // Start lane inference on the first decoded frame, then every second
-    // processed frame.  The previous zero start delayed the only diagnostic
-    // path when the stream was dropping frames.
     private var laneFrameCounter = 1
+    private var signFrameCounter = 0
     private let inferenceStride = 2
     private let laneStride = 2
+    // Traffic signs persist for many frames. Running OCR/shape recognition at a
+    // lower cadence keeps lane + lead latency low while still confirming signs quickly.
+    private let signStride = 8
     private var lastVehicleSeenAt: TimeInterval = 0
     private var lastLaneSeenAt: TimeInterval = 0
     private let detector: VehicleDetector?
@@ -39,6 +42,8 @@ final class FrameProcessor: ObservableObject {
     private let leadDistanceTracker = LeadDistanceTracker()
     private let laneDetector: LaneAIDetector?
     private let laneDepartureMonitor = LaneDepartureMonitor()
+    private let trafficSignDetector = TrafficSignDetector()
+    private let trafficSignTracker = TrafficSignStateTracker()
     private var latestLaneDetection: LaneDetection?
 
     init() {
@@ -70,6 +75,7 @@ final class FrameProcessor: ObservableObject {
         totalFrames &+= 1
         inferenceFrameCounter &+= 1
         laneFrameCounter &+= 1
+        signFrameCounter &+= 1
 
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
@@ -80,13 +86,13 @@ final class FrameProcessor: ObservableObject {
         var newLaneDetection: LaneDetection?
         var laneWasEvaluated = false
         var newLaneState: LaneDepartureState?
+        var newTrafficSignState: TrafficSignState?
+        var newTrafficSignStatus: String?
 
         if inferenceFrameCounter >= inferenceStride, let detector {
             inferenceFrameCounter = 0
             do {
                 let result = try detector.detect(pixelBuffer: pixelBuffer)
-                // Lead selection happens after lane inference.  The detector
-                // must never choose a vehicle in the opposite/adjacent lane.
                 newDetections = result.detections.map { $0.markingLead(false) }
                 newInferenceMS = result.inferenceMS
             } catch {
@@ -124,6 +130,33 @@ final class FrameProcessor: ObservableObject {
             }
         }
 
+        if signFrameCounter >= signStride {
+            signFrameCounter = 0
+            do {
+                let observations = try trafficSignDetector.detect(pixelBuffer: pixelBuffer, timestamp: timestamp)
+                var state = trafficSignTracker.state
+                for observation in observations {
+                    state = trafficSignTracker.ingest(observation)
+                }
+                newTrafficSignState = state
+
+                if observations.isEmpty {
+                    newTrafficSignStatus = "SIGN AI • SEARCH"
+                } else {
+                    let summary = observations.map { observation -> String in
+                        switch observation.kind {
+                        case .speedLimit(let value): return "LIMIT \(value)"
+                        case .denseAreaStart: return "R420"
+                        case .denseAreaEnd: return "R421"
+                        }
+                    }.joined(separator: " + ")
+                    newTrafficSignStatus = "SIGN AI • \(summary)"
+                }
+            } catch {
+                newTrafficSignStatus = "SIGN AI ERROR: \(error.localizedDescription)"
+            }
+        }
+
         if var measured = newDetections {
             if let lane = latestLaneDetection,
                let leadIndex = leadVehicleIndex(in: measured, lane: lane) {
@@ -158,12 +191,9 @@ final class FrameProcessor: ObservableObject {
         let now = ProcessInfo.processInfo.systemUptime
         let shouldPublishMetrics = now - lastPublishedAt >= 0.25
 
-        guard shouldPublishMetrics || newDetections != nil || laneWasEvaluated else { return }
+        guard shouldPublishMetrics || newDetections != nil || laneWasEvaluated || newTrafficSignState != nil else { return }
 
-        if shouldPublishMetrics {
-            lastPublishedAt = now
-        }
-
+        if shouldPublishMetrics { lastPublishedAt = now }
         let count = totalFrames
 
         DispatchQueue.main.async { [weak self] in
@@ -173,7 +203,7 @@ final class FrameProcessor: ObservableObject {
                 self.frameWidth = width
                 self.frameHeight = height
                 self.processedFrames = count
-                self.pipelineStatus = "70MAI FRAME PIPELINE ACTIVE"
+                self.pipelineStatus = "FRAME PIPELINE ACTIVE"
             }
 
             if let newDetections {
@@ -187,15 +217,11 @@ final class FrameProcessor: ObservableObject {
                     : "VEHICLE MODEL ACTIVE • \(newDetections.count) VEHICLE(S)"
             }
 
-            if let newInferenceMS {
-                self.inferenceMS = newInferenceMS
-            }
+            if let newInferenceMS { self.inferenceMS = newInferenceMS }
 
             if laneWasEvaluated {
                 self.laneDetection = newLaneDetection
-                if let newLaneState {
-                    self.laneDepartureState = newLaneState
-                }
+                if let newLaneState { self.laneDepartureState = newLaneState }
 
                 if let lane = newLaneDetection {
                     self.laneStatus = String(
@@ -207,11 +233,14 @@ final class FrameProcessor: ObservableObject {
                     self.laneStatus = "LANE SEARCHING"
                 }
             }
+
+            if let newTrafficSignState { self.trafficSignState = newTrafficSignState }
+            if let newTrafficSignStatus { self.trafficSignStatus = newTrafficSignStatus }
         }
     }
 
     /// Select only a vehicle whose road-contact point is inside the two
-    /// detected ego-lane boundaries.  No lane means no distance warning.
+    /// detected ego-lane boundaries. No lane means no distance warning.
     private func leadVehicleIndex(
         in detections: [VehicleDetection],
         lane: LaneDetection
