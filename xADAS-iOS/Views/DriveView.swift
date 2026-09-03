@@ -59,7 +59,9 @@ struct DriveView: View {
                 horizonRatio: UserDefaults.standard.double(forKey: DistanceEstimator.horizonRatioKey),
                 laneDetection: activeProcessor.laneDetection,
                 laneStatus: activeProcessor.laneStatus,
-                laneDepartureState: activeProcessor.laneDepartureState
+                laneDepartureState: activeProcessor.laneDepartureState,
+                trafficSignState: activeProcessor.trafficSignState,
+                trafficSignStatus: activeProcessor.trafficSignStatus
             )
 
             if showCalibration {
@@ -95,12 +97,8 @@ struct DriveView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView()
         }
-        .onAppear {
-            configureSelectedSource()
-        }
-        .onChange(of: cameraSourceRaw) { _ in
-            configureSelectedSource()
-        }
+        .onAppear { configureSelectedSource() }
+        .onChange(of: cameraSourceRaw) { _ in configureSelectedSource() }
         .onChange(of: scenePhase) { phase in
             if phase == .active {
                 configureSelectedSource()
