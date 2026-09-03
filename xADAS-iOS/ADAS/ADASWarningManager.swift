@@ -4,6 +4,8 @@ import Combine
 import Foundation
 
 final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegate, AVSpeechSynthesizerDelegate {
+    static let volumeKey = "xadas.warning.volume"
+
     private var player: AVAudioPlayer?
     private let speechSynthesizer = AVSpeechSynthesizer()
     private var lastDistanceAlertAt: TimeInterval = 0
@@ -15,10 +17,17 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
 
     override init() {
         super.init()
+        if UserDefaults.standard.object(forKey: Self.volumeKey) == nil {
+            UserDefaults.standard.set(0.35, forKey: Self.volumeKey)
+        }
         player = try? AVAudioPlayer(data: Self.makeBeepWAV())
         player?.delegate = self
         player?.prepareToPlay()
         speechSynthesizer.delegate = self
+    }
+
+    private var warningVolume: Float {
+        Float(min(max(UserDefaults.standard.double(forKey: Self.volumeKey), 0), 1))
     }
 
     func update(distance: LeadDistanceState, lane: LaneDepartureState) {
@@ -35,11 +44,7 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
             && (!previousLaneWarning || lane != lastLaneState || now - lastLaneAlertAt >= 3.0)
 
         if distanceDangerDue {
-            alert(
-                strong: true,
-                message: "Cảnh báo, khoảng cách quá gần",
-                key: "distance-danger"
-            )
+            alert(strong: true, message: "Cảnh báo, khoảng cách quá gần", key: "distance-danger")
             lastDistanceAlertAt = now
         } else if laneWarningDue {
             let isLeft = lane == .warningLeft
@@ -50,11 +55,7 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
             )
             lastLaneAlertAt = now
         } else if distanceCautionDue {
-            alert(
-                strong: false,
-                message: "Chú ý khoảng cách",
-                key: "distance-caution"
-            )
+            alert(strong: false, message: "Chú ý khoảng cách", key: "distance-caution")
             lastDistanceAlertAt = now
         }
         lastDistanceRisk = distance.risk
@@ -62,12 +63,7 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
     }
 
     func testWarning() {
-        alert(
-            strong: true,
-            message: "Hệ thống cảnh báo hoạt động",
-            key: "test",
-            forceSpeech: true
-        )
+        alert(strong: true, message: "Hệ thống cảnh báo hoạt động", key: "test", forceSpeech: true)
     }
 
     private func alert(
@@ -77,9 +73,9 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
         forceSpeech: Bool = false
     ) {
         activateWarningAudio()
+        let volume = warningVolume
         player?.currentTime = 0
-        // Full app volume; the iPhone's system media volume remains the master control.
-        player?.volume = 1.0
+        player?.volume = volume
         player?.play()
         AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
 
@@ -92,7 +88,7 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
         let utterance = AVSpeechUtterance(string: message)
         utterance.voice = AVSpeechSynthesisVoice(language: "vi-VN")
         utterance.rate = 0.48
-        utterance.volume = 1.0
+        utterance.volume = volume
         speechSynthesizer.speak(utterance)
         lastSpokenKey = key
         lastSpeechAt = now
@@ -100,37 +96,24 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
 
     private func activateWarningAudio() {
         let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(
-            .playback,
-            mode: .voicePrompt,
-            options: [.mixWithOthers]
-        )
+        try? session.setCategory(.playback, mode: .voicePrompt, options: [.mixWithOthers])
         try? session.setActive(true)
     }
 
     private func releaseWarningAudioIfIdle() {
         guard player?.isPlaying != true, !speechSynthesizer.isSpeaking else { return }
-        try? AVAudioSession.sharedInstance().setActive(
-            false,
-            options: [.notifyOthersOnDeactivation]
-        )
+        try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         releaseWarningAudioIfIdle()
     }
 
-    func speechSynthesizer(
-        _ synthesizer: AVSpeechSynthesizer,
-        didFinish utterance: AVSpeechUtterance
-    ) {
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         releaseWarningAudioIfIdle()
     }
 
-    func speechSynthesizer(
-        _ synthesizer: AVSpeechSynthesizer,
-        didCancel utterance: AVSpeechUtterance
-    ) {
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
         releaseWarningAudioIfIdle()
     }
 
