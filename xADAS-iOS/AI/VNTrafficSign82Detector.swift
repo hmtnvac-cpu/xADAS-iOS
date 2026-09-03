@@ -24,9 +24,6 @@ enum VNTrafficSign82Error: LocalizedError {
     }
 }
 
-/// Direct 82-class Vietnamese traffic-sign detector.
-/// Important difference from the previous VTSR path: speed limits are native
-/// classes (40/50/60/70/80/90/100/110/120...), so OCR is not required.
 final class VNTrafficSign82Detector {
     static let inputSize = 640
     static let classCount = 82
@@ -53,7 +50,12 @@ final class VNTrafficSign82Detector {
         let inputValue = try ORTValue(
             tensorData: NSMutableData(data: inputData),
             elementType: .float,
-            shape: [1, 3, NSNumber(value: Self.inputSize), NSNumber(value: Self.inputSize)]
+            shape: [
+                NSNumber(value: 1),
+                NSNumber(value: 3),
+                NSNumber(value: Self.inputSize),
+                NSNumber(value: Self.inputSize)
+            ]
         )
 
         let outputs = try session.run(
@@ -72,10 +74,9 @@ final class VNTrafficSign82Detector {
         var raw: [VN82Detection] = []
         raw.reserveCapacity(40)
 
-        // Ultralytics YOLO11 ONNX export: [1, 4 + classes, candidates].
         for candidate in 0..<candidateCount {
-            let cx = values[0 * candidateCount + candidate]
-            let cy = values[1 * candidateCount + candidate]
+            let cx = values[candidate]
+            let cy = values[candidateCount + candidate]
             let w = values[2 * candidateCount + candidate]
             let h = values[3 * candidateCount + candidate]
 
@@ -99,7 +100,6 @@ final class VNTrafficSign82Detector {
             let right = Double(cx + w / 2)
             let bottom = Double(cy + h / 2)
 
-            // Undo letterbox and map back to normalized source coordinates.
             let sourceLeft = (left - prepared.padX) / prepared.scale
             let sourceTop = (top - prepared.padY) / prepared.scale
             let sourceRight = (right - prepared.padX) / prepared.scale
@@ -114,10 +114,10 @@ final class VNTrafficSign82Detector {
             guard width > 0.004, height > 0.004 else { continue }
 
             let visionBox = CGRect(
-                x: x0,
-                y: 1.0 - y1Bottom,
-                width: width,
-                height: height
+                x: CGFloat(x0),
+                y: CGFloat(1.0 - y1Bottom),
+                width: CGFloat(width),
+                height: CGFloat(height)
             )
             raw.append(VN82Detection(classID: bestClass, confidence: bestScore, boundingBox: visionBox))
         }
@@ -134,9 +134,6 @@ final class VNTrafficSign82Detector {
         let sourceHeight: Double
     }
 
-    /// Matches Ultralytics inference preprocessing: preserve aspect ratio and
-    /// letterbox into 640x640 with RGB 114 padding instead of stretching 16:9
-    /// 70mai frames into a square.
     private func makeInput(pixelBuffer: CVPixelBuffer) throws -> PreparedInput {
         let sourceWidth = Double(CVPixelBufferGetWidth(pixelBuffer))
         let sourceHeight = Double(CVPixelBufferGetHeight(pixelBuffer))
@@ -163,11 +160,19 @@ final class VNTrafficSign82Detector {
         }
 
         let source = CIImage(cvPixelBuffer: pixelBuffer)
-        let resized = source.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-            .transformed(by: CGAffineTransform(translationX: padX, y: padY))
+        let resized = source.transformed(by: CGAffineTransform(
+            scaleX: CGFloat(scale),
+            y: CGFloat(scale)
+        )).transformed(by: CGAffineTransform(
+            translationX: CGFloat(padX),
+            y: CGFloat(padY)
+        ))
 
-        let gray = CIImage(color: CIColor(red: 114.0 / 255.0, green: 114.0 / 255.0, blue: 114.0 / 255.0))
-            .cropped(to: CGRect(x: 0, y: 0, width: Self.inputSize, height: Self.inputSize))
+        let gray = CIImage(color: CIColor(
+            red: CGFloat(114.0 / 255.0),
+            green: CGFloat(114.0 / 255.0),
+            blue: CGFloat(114.0 / 255.0)
+        )).cropped(to: CGRect(x: 0, y: 0, width: Self.inputSize, height: Self.inputSize))
         let composed = resized.composited(over: gray)
 
         ciContext.render(
