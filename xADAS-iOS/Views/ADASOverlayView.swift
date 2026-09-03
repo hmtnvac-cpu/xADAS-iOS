@@ -18,6 +18,9 @@ struct ADASOverlayView: View {
     let laneDepartureState: LaneDepartureState
     let trafficSignState: TrafficSignState
     let trafficSignStatus: String
+    let mapSpeedLimitKPH: Int?
+    let cameraSpeedLimitKPH: Int?
+    let mapStatus: String
 
     var body: some View {
         GeometryReader { proxy in
@@ -43,6 +46,10 @@ struct ADASOverlayView: View {
                                     .padding(.vertical, 4)
                                     .background(.black.opacity(0.56), in: Capsule())
                             }
+
+                            Text(fusionLabel)
+                                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.78))
                         }
 
                         Spacer()
@@ -58,6 +65,9 @@ struct ADASOverlayView: View {
                             Text(signIndicatorText)
                                 .font(.caption2.monospaced().bold())
                                 .foregroundStyle(trafficSignStatus.contains("ERROR") ? .red : .white.opacity(0.78))
+                            Text(mapStatus)
+                                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.58))
                         }
                     }
                     .padding(.horizontal, 20)
@@ -74,9 +84,6 @@ struct ADASOverlayView: View {
                     laneOverlay(laneDetection, in: proxy.size)
                 }
 
-                // Keep distance information out of the road center. This small
-                // HUD sits near the lower-right edge where it does not cover the
-                // lead vehicle, lane convergence point or upcoming traffic signs.
                 compactDistanceHUD
                     .position(x: proxy.size.width - 62, y: proxy.size.height - 68)
 
@@ -93,6 +100,13 @@ struct ADASOverlayView: View {
             .foregroundStyle(.white)
         }
         .allowsHitTesting(false)
+    }
+
+    private var fusionLabel: String {
+        let map = mapSpeedLimitKPH.map(String.init) ?? "--"
+        let camera = cameraSpeedLimitKPH.map(String.init) ?? "--"
+        let final = trafficSignState.explicitSpeedLimitKPH.map(String.init) ?? "--"
+        return "MAP \(map) • CAM \(camera) • FINAL \(final)"
     }
 
     private var speedLimitBadge: some View {
@@ -132,7 +146,7 @@ struct ADASOverlayView: View {
     }
 
     private var laneIndicatorText: String {
-        if laneStatus.contains("ACTIVE") { return "LANE AI • LOCK" }
+        if laneStatus.contains("ACTIVE") { return "LANE AI • EGO LOCK" }
         if laneStatus.contains("ERROR") || laneStatus.contains("missing") || laneStatus.contains("Missing") {
             return "LANE AI • ERROR"
         }
@@ -204,8 +218,8 @@ struct ADASOverlayView: View {
 
             let leftWarning = laneDepartureState == .warningLeft
             let rightWarning = laneDepartureState == .warningRight
-            let leftColor: Color = leftWarning ? .red : .cyan
-            let rightColor: Color = rightWarning ? .red : .cyan
+            let leftColor: Color = leftWarning ? .red : .green
+            let rightColor: Color = rightWarning ? .red : .green
 
             context.stroke(left, with: .color(leftColor.opacity(0.22)), lineWidth: leftWarning ? 8 : 5)
             context.stroke(right, with: .color(rightColor.opacity(0.22)), lineWidth: rightWarning ? 8 : 5)
