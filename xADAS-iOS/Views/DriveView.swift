@@ -162,8 +162,6 @@ struct DriveView: View {
         .persistentSystemOverlays(.hidden)
     }
 
-    /// Map is the prior. A matching camera result is accepted immediately. A strong
-    /// camera disagreement must repeat three times before it overrides the road map.
     private func updateSpeedLimitFusion(cameraState: TrafficSignState) {
         let mapLimit = mapSpeedLimitProvider.speedLimitKPH
         guard let cameraLimit = cameraState.explicitSpeedLimitKPH else {
@@ -220,12 +218,20 @@ struct DriveView: View {
         switch selectedSource {
         case .seventyMai:
             cameraManager.stop()
+            // 140° is the advertised dashcam viewing angle, not the decoded
+            // stream's usable horizontal pinhole FOV. Distance now uses the
+            // calibrated effective focal length instead.
             frameProcessor.horizontalFieldOfViewDegrees = 140
+            frameProcessor.effectiveFocalPixelsAt1920 = max(
+                UserDefaults.standard.double(forKey: DistanceEstimator.seventyMaiFocalPixelsKey),
+                100
+            )
             useVLCFallback = false
             restartToken = UUID()
             rtspStatus = "70MAI STARTING"
             scheduleNativeFallbackCheck(for: restartToken)
         case .iPhone:
+            frameProcessor.effectiveFocalPixelsAt1920 = nil
             useVLCFallback = false
             rtspStatus = "IPHONE CAMERA ACTIVE"
             cameraManager.start()
