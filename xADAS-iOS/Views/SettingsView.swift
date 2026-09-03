@@ -2,8 +2,8 @@ import SwiftUI
 
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var showRoadGuide = true
-    @State private var showDebugHUD = true
+    @AppStorage("xadas.overlay.roadGuide") private var showRoadGuide = true
+    @AppStorage("xadas.overlay.debugHUD") private var showDebugHUD = true
     @AppStorage(CameraSource.selectionKey) private var cameraSourceRaw = CameraSourceChoice.seventyMai.rawValue
     @AppStorage(ADASWarningManager.volumeKey) private var warningVolume: Double = 0.35
     @AppStorage(ADASWarningManager.vibrationKey) private var warningVibration = true
