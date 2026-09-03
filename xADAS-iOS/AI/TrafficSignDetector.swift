@@ -3,13 +3,6 @@ import CoreVideo
 import Foundation
 import Vision
 
-/// Lightweight on-device traffic-sign recognizer for the first production
-/// scope: explicit speed-limit signs plus R.420/R.421 dense-area signs.
-///
-/// Speed signs are read with Vision OCR and then validated against the red/white
-/// appearance around the digits. Dense-area signs use Vision rectangle proposals
-/// and a conservative white/dark/red appearance test. Temporal confirmation is
-/// performed by TrafficSignStateTracker, not in this detector.
 final class TrafficSignDetector {
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
     private let allowedSpeeds = Set(stride(from: 20, through: 120, by: 10))
@@ -49,8 +42,6 @@ final class TrafficSignDetector {
 
             let sampleRect = expandedSignRect(around: result.boundingBox)
             guard let appearance = appearance(in: sampleRect, pixelBuffer: pixelBuffer) else { continue }
-
-            // A P.127 sign should have a meaningful red ring and a bright center.
             guard appearance.redRatio >= 0.014,
                   appearance.brightRatio >= 0.16 else { continue }
 
@@ -76,12 +67,10 @@ final class TrafficSignDetector {
     ) throws -> TrafficSignObservation? {
         let request = VNDetectRectanglesRequest()
         request.maximumObservations = 10
-        request.minimumConfidence = 0.58
         request.minimumAspectRatio = 0.72
         request.maximumAspectRatio = 2.6
         request.minimumSize = 0.025
         request.quadratureTolerance = 22
-        // Ignore the dashboard / bonnet zone.
         request.regionOfInterest = CGRect(x: 0.02, y: 0.24, width: 0.96, height: 0.74)
 
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
@@ -97,19 +86,16 @@ final class TrafficSignDetector {
                   box.width < 0.36,
                   box.height < 0.30 else { continue }
 
-            guard let a = appearance(in: box.insetBy(dx: -box.width * 0.06, dy: -box.height * 0.06), pixelBuffer: pixelBuffer) else {
-                continue
-            }
+            let expanded = box.insetBy(dx: -box.width * 0.06, dy: -box.height * 0.06)
+                .intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+            guard let a = appearance(in: expanded, pixelBuffer: pixelBuffer) else { continue }
 
-            // R.420/R.421 are light rectangular signs with a substantial dark
-            // city/settlement pictogram. R.421 additionally contains a red slash.
             guard a.brightRatio >= 0.38,
                   a.darkRatio >= 0.055,
                   a.darkRatio <= 0.48 else { continue }
 
             let hasRedSlash = a.redRatio >= 0.017
             let kind: TrafficSignKind = hasRedSlash ? .denseAreaEnd : .denseAreaStart
-
             let structureScore = min(0.20, a.brightRatio * 0.12 + a.darkRatio * 0.42)
             let slashBonus = hasRedSlash ? min(0.09, a.redRatio * 1.6) : 0.0
             let confidence = min(0.92, rect.confidence + Float(structureScore + slashBonus))
@@ -161,14 +147,17 @@ final class TrafficSignDetector {
             .transformed(by: CGAffineTransform(scaleX: sx, y: sy))
 
         var pixels = [UInt8](repeating: 0, count: targetWidth * targetHeight * 4)
-        ciContext.render(
-            cropped,
-            toBitmap: &pixels,
-            rowBytes: targetWidth * 4,
-            bounds: CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight),
-            format: .RGBA8,
-            colorSpace: CGColorSpaceCreateDeviceRGB()
-        )
+        pixels.withUnsafeMutableBytes { rawBuffer in
+            guard let base = rawBuffer.baseAddress else { return }
+            ciContext.render(
+                cropped,
+                toBitmap: base,
+                rowBytes: targetWidth * 4,
+                bounds: CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight),
+                format: .RGBA8,
+                colorSpace: CGColorSpaceCreateDeviceRGB()
+            )
+        }
 
         var red = 0
         var bright = 0
