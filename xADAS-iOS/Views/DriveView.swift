@@ -101,6 +101,11 @@ struct DriveView: View {
         .onAppear {
             vehicleSpeedMonitor.start()
             configureSelectedSource()
+            updateWarnings(
+                distance: activeProcessor.leadDistanceState,
+                lane: activeProcessor.laneDepartureState,
+                trafficSign: activeProcessor.trafficSignState
+            )
         }
         .onChange(of: cameraSourceRaw) { _ in configureSelectedSource() }
         .onChange(of: scenePhase) { phase in
@@ -113,24 +118,45 @@ struct DriveView: View {
             }
         }
         .onChange(of: activeProcessor.leadDistanceState) { newValue in
-            updateWarnings(distance: newValue, lane: activeProcessor.laneDepartureState)
+            updateWarnings(
+                distance: newValue,
+                lane: activeProcessor.laneDepartureState,
+                trafficSign: activeProcessor.trafficSignState
+            )
         }
         .onChange(of: activeProcessor.laneDepartureState) { newValue in
-            updateWarnings(distance: activeProcessor.leadDistanceState, lane: newValue)
+            updateWarnings(
+                distance: activeProcessor.leadDistanceState,
+                lane: newValue,
+                trafficSign: activeProcessor.trafficSignState
+            )
+        }
+        .onChange(of: activeProcessor.trafficSignState) { newValue in
+            updateWarnings(
+                distance: activeProcessor.leadDistanceState,
+                lane: activeProcessor.laneDepartureState,
+                trafficSign: newValue
+            )
         }
         .onChange(of: vehicleSpeedMonitor.speedKPH) { _ in
             updateWarnings(
                 distance: activeProcessor.leadDistanceState,
-                lane: activeProcessor.laneDepartureState
+                lane: activeProcessor.laneDepartureState,
+                trafficSign: activeProcessor.trafficSignState
             )
         }
         .persistentSystemOverlays(.hidden)
     }
 
-    private func updateWarnings(distance: LeadDistanceState, lane: LaneDepartureState) {
+    private func updateWarnings(
+        distance: LeadDistanceState,
+        lane: LaneDepartureState,
+        trafficSign: TrafficSignState
+    ) {
         warningManager.update(
             distance: distance,
             lane: lane,
+            trafficSign: trafficSign,
             vehicleSpeedKPH: vehicleSpeedMonitor.speedKPH
         )
     }
