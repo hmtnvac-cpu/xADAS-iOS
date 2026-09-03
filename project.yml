@@ -30,9 +30,10 @@ targets:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         SeventyMaiToken: "__SEVENTYMAI_TOKEN__"
-        NSCameraUsageDescription: "xADAS uses the rear camera for real-time driver-assistance vision processing."
+        MapboxAccessToken: "__MAPBOX_TOKEN__"
+        NSCameraUsageDescription: "xADAS uses the camera for real-time driver-assistance vision processing."
         NSLocalNetworkUsageDescription: "xADAS connects directly to your 70mai dashcam on its local Wi-Fi network to receive the RTSP video stream."
-        NSLocationWhenInUseUsageDescription: "xADAS uses GPS speed for speed-limit and experimental ADAS warnings while driving."
+        NSLocationWhenInUseUsageDescription: "xADAS uses GPS to estimate vehicle speed, match the current road and obtain map speed-limit data for driver-assistance warnings."
         UIRequiresFullScreen: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationLandscapeLeft
