@@ -44,6 +44,7 @@ final class TrafficSignStateTracker {
     private(set) var state = TrafficSignState()
 
     private struct Candidate {
+        var score: Float
         var hits: Int
         var firstSeen: TimeInterval
         var lastSeen: TimeInterval
@@ -51,18 +52,24 @@ final class TrafficSignStateTracker {
     }
 
     private var candidates: [TrafficSignKind: Candidate] = [:]
-    private let minimumConfidence: Float = 0.42
-    private let requiredHits = 2
-    private let confirmationWindow: TimeInterval = 2.2
+
+    // 70mai snapshots are intermittent; do not require adjacent detections.
+    // Accumulate evidence for the same semantic sign over a short window.
+    private let minimumObservationConfidence: Float = 0.28
+    private let confirmationWindow: TimeInterval = 3.0
+    private let speedLockScore: Float = 1.05
+    private let areaLockScore: Float = 1.15
+    private let strongSingleHit: Float = 0.88
 
     func ingest(_ observation: TrafficSignObservation) -> TrafficSignState {
-        guard observation.confidence >= minimumConfidence else { return state }
+        guard observation.confidence >= minimumObservationConfidence else { return state }
 
         candidates = candidates.filter {
             observation.timestamp - $0.value.lastSeen <= confirmationWindow
         }
 
         var candidate = candidates[observation.kind] ?? Candidate(
+            score: 0,
             hits: 0,
             firstSeen: observation.timestamp,
             lastSeen: observation.timestamp,
@@ -71,6 +78,7 @@ final class TrafficSignStateTracker {
 
         if observation.timestamp - candidate.firstSeen > confirmationWindow {
             candidate = Candidate(
+                score: 0,
                 hits: 0,
                 firstSeen: observation.timestamp,
                 lastSeen: observation.timestamp,
@@ -81,9 +89,20 @@ final class TrafficSignStateTracker {
         candidate.hits += 1
         candidate.lastSeen = observation.timestamp
         candidate.bestConfidence = max(candidate.bestConfidence, observation.confidence)
+        candidate.score += observation.confidence
         candidates[observation.kind] = candidate
 
-        guard candidate.hits >= requiredHits else { return state }
+        let threshold: Float
+        switch observation.kind {
+        case .speedLimit: threshold = speedLockScore
+        case .denseAreaStart, .denseAreaEnd: threshold = areaLockScore
+        }
+
+        // A very strong detector result can lock immediately. Otherwise require
+        // at least two observations whose confidence accumulates past threshold.
+        let confirmed = observation.confidence >= strongSingleHit
+            || (candidate.hits >= 2 && candidate.score >= threshold)
+        guard confirmed else { return state }
 
         switch observation.kind {
         case .speedLimit(let value):
@@ -98,7 +117,19 @@ final class TrafficSignStateTracker {
         state.lastConfirmedSign = observation.kind
         state.confidence = candidate.bestConfidence
         state.updatedAt = observation.timestamp
-        candidates[observation.kind] = nil
+
+        // A confirmed speed supersedes competing speed candidates; likewise for
+        // area signs. This prevents stale candidates from immediately flipping HUD.
+        switch observation.kind {
+        case .speedLimit:
+            candidates = candidates.filter {
+                if case .speedLimit = $0.key { return false }
+                return true
+            }
+        case .denseAreaStart, .denseAreaEnd:
+            candidates.removeValue(forKey: .denseAreaStart)
+            candidates.removeValue(forKey: .denseAreaEnd)
+        }
         return state
     }
 }
