@@ -40,9 +40,6 @@ struct TrafficSignState: Equatable {
     }
 }
 
-/// Each sign candidate has its own temporal confirmation counter so a speed
-/// sign and an area sign can be recognized at the same time without resetting
-/// one another. This is important on gantries and clustered roadside signs.
 final class TrafficSignStateTracker {
     private(set) var state = TrafficSignState()
 
@@ -54,9 +51,11 @@ final class TrafficSignStateTracker {
     }
 
     private var candidates: [TrafficSignKind: Candidate] = [:]
-    private let minimumConfidence: Float = 0.70
-    private let requiredHits = 3
-    private let confirmationWindow: TimeInterval = 1.35
+    // Dashcam signs can be visible clearly for less than one second. Requiring
+    // three high-confidence hits caused real signs to disappear before lock.
+    private let minimumConfidence: Float = 0.48
+    private let requiredHits = 2
+    private let confirmationWindow: TimeInterval = 2.0
 
     func ingest(_ observation: TrafficSignObservation) -> TrafficSignState {
         guard observation.confidence >= minimumConfidence else { return state }
