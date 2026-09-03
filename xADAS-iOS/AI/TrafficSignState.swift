@@ -53,13 +53,15 @@ final class TrafficSignStateTracker {
 
     private var candidates: [TrafficSignKind: Candidate] = [:]
 
-    // Tuned for live driving: require repeat evidence, but keep the window short
-    // enough that a roadside sign can lock before the car passes it.
-    private let minimumObservationConfidence: Float = 0.32
-    private let confirmationWindow: TimeInterval = 1.25
-    private let speedLockScore: Float = 0.86
-    private let areaLockScore: Float = 0.92
-    private let strongSingleHit: Float = 0.95
+    // Multi-scale scanning sees a given road zone several times per second. Three
+    // consistent speed observations are therefore fast enough for driving but much
+    // harder for a one-frame 60/80 confusion to flip the HUD.
+    private let minimumObservationConfidence: Float = 0.28
+    private let confirmationWindow: TimeInterval = 1.35
+    private let speedLockScore: Float = 0.90
+    private let speedChangeScore: Float = 1.05
+    private let areaLockScore: Float = 0.82
+    private let strongSingleHit: Float = 0.98
 
     func ingest(_ observation: TrafficSignObservation) -> TrafficSignState {
         guard observation.confidence >= minimumObservationConfidence else { return state }
@@ -92,42 +94,46 @@ final class TrafficSignStateTracker {
         candidate.score += observation.confidence
         candidates[observation.kind] = candidate
 
-        let threshold: Float
-        switch observation.kind {
-        case .speedLimit: threshold = speedLockScore
-        case .denseAreaStart, .denseAreaEnd: threshold = areaLockScore
-        }
-
-        // One exceptionally strong result may lock immediately. Normal detections
-        // need two consistent observations; this prevents 60/80 flicker.
-        let confirmed = observation.confidence >= strongSingleHit
-            || (candidate.hits >= 2 && candidate.score >= threshold)
-        guard confirmed else { return state }
-
         switch observation.kind {
         case .speedLimit(let value):
             guard (10...120).contains(value), value % 10 == 0 else { return state }
+
+            let changingExistingLimit = state.explicitSpeedLimitKPH.map { $0 != value } ?? false
+            let requiredScore = changingExistingLimit ? speedChangeScore : speedLockScore
+            let requiredHits = changingExistingLimit ? 3 : 3
+            let confirmed = observation.confidence >= strongSingleHit
+                || (candidate.hits >= requiredHits && candidate.score >= requiredScore)
+            guard confirmed else { return state }
+
             state.explicitSpeedLimitKPH = value
-        case .denseAreaStart:
-            state.denseArea = .inside
-        case .denseAreaEnd:
-            state.denseArea = .outside
-        }
+            state.lastConfirmedSign = observation.kind
+            state.confidence = candidate.bestConfidence
+            state.updatedAt = observation.timestamp
 
-        state.lastConfirmedSign = observation.kind
-        state.confidence = candidate.bestConfidence
-        state.updatedAt = observation.timestamp
-
-        switch observation.kind {
-        case .speedLimit:
+            // Once a speed is locked, discard all competing speed evidence. A new
+            // limit must build a fresh three-hit case instead of inheriting stale score.
             candidates = candidates.filter {
                 if case .speedLimit = $0.key { return false }
                 return true
             }
+
         case .denseAreaStart, .denseAreaEnd:
+            let confirmed = observation.confidence >= strongSingleHit
+                || (candidate.hits >= 2 && candidate.score >= areaLockScore)
+            guard confirmed else { return state }
+
+            switch observation.kind {
+            case .denseAreaStart: state.denseArea = .inside
+            case .denseAreaEnd: state.denseArea = .outside
+            case .speedLimit: break
+            }
+            state.lastConfirmedSign = observation.kind
+            state.confidence = candidate.bestConfidence
+            state.updatedAt = observation.timestamp
             candidates.removeValue(forKey: .denseAreaStart)
             candidates.removeValue(forKey: .denseAreaEnd)
         }
+
         return state
     }
 }
