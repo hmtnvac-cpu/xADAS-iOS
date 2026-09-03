@@ -10,6 +10,7 @@ on:
       - "scripts/download-model.sh"
       - "scripts/download-lane-model.sh"
       - "scripts/download-vtsr-model.sh"
+      - "scripts/download-vn82-model.sh"
       - "scripts/extract-ufldv2-model.py"
       - "scripts/quantize-ufldv2-model.py"
       - ".github/workflows/build-ios.yml"
@@ -48,16 +49,40 @@ jobs:
           python3 -m pip install --disable-pip-version-check onnx==1.17.0 onnxruntime==1.20.1
           bash scripts/download-lane-model.sh
 
-      - name: Cache Vietnam traffic sign model
+      - name: Cache Vietnam traffic sign models
         uses: actions/cache@v4
         with:
           path: |
             xADAS-iOS/Models/VTSRInt8.onnx
             xADAS-iOS/Models/VTSRLabelMapping.json
-          key: vtsr-int8-v1
+            xADAS-iOS/Models/VNTrafficSign82.onnx
+          key: vietnam-sign-models-v2-vn82
 
-      - name: Prepare Vietnam traffic sign model
-        run: bash scripts/download-vtsr-model.sh
+      - name: Prepare Vietnam traffic sign models
+        run: |
+          bash scripts/download-vtsr-model.sh
+          bash scripts/download-vn82-model.sh
+
+      - name: Verify VN82 ONNX contract
+        run: |
+          python3 - <<'PY'
+          import onnx
+          path = "xADAS-iOS/Models/VNTrafficSign82.onnx"
+          model = onnx.load(path)
+          graph = model.graph
+          assert graph.input, "VN82 has no input"
+          assert graph.output, "VN82 has no output"
+          inp = graph.input[0]
+          out = graph.output[0]
+          in_shape = [d.dim_value if d.dim_value else d.dim_param for d in inp.type.tensor_type.shape.dim]
+          out_shape = [d.dim_value if d.dim_value else d.dim_param for d in out.type.tensor_type.shape.dim]
+          print("VN82 input:", inp.name, in_shape)
+          print("VN82 output:", out.name, out_shape)
+          assert inp.name == "images", f"unexpected VN82 input name: {inp.name}"
+          assert out.name == "output0", f"unexpected VN82 output name: {out.name}"
+          assert in_shape[-2:] == [640, 640], f"unexpected VN82 input shape: {in_shape}"
+          assert 86 in out_shape, f"VN82 output does not expose 4+82=86 features: {out_shape}"
+          PY
 
       - name: Generate Xcode project
         run: xcodegen generate
@@ -114,6 +139,7 @@ jobs:
           test -f "$APP_PATH/UFLDv2TuSimpleRes18Int8.onnx"
           test -f "$APP_PATH/VTSRInt8.onnx"
           test -f "$APP_PATH/VTSRLabelMapping.json"
+          test -f "$APP_PATH/VNTrafficSign82.onnx"
           CAMERA_USAGE=$(/usr/libexec/PlistBuddy -c 'Print :NSCameraUsageDescription' "$INFO")
           LOCAL_NETWORK_USAGE=$(/usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' "$INFO")
           MIN_OS=$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$INFO")
