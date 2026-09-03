@@ -1,15 +1,19 @@
+import CoreGraphics
 import CoreVideo
 import Foundation
 
 /// Production traffic-sign pipeline for xADAS.
-/// The direct 82-class Vietnam YOLO model is authoritative whenever it returns
-/// a mapped sign. OCR/VTSR is used only when the direct model has no usable hit.
+/// VN82 YOLO is authoritative when available. To improve long-range detection,
+/// each invocation rotates between full-frame and overlapping left/right road crops.
+/// This increases effective pixels on small roadside signs without multiplying
+/// inference cost on every frame.
 final class HybridTrafficSignDetector {
     private let directDetector: VNTrafficSign82Detector?
     private let fallback = TrafficSignDetector()
+    private var scanPhase = 0
 
     var modeLabel: String {
-        directDetector == nil ? "SIGN AI • OCR FALLBACK" : "SIGN AI • VN82 YOLO"
+        directDetector == nil ? "SIGN AI • OCR FALLBACK" : "SIGN AI • VN82 MULTISCALE"
     }
 
     init() {
@@ -17,50 +21,61 @@ final class HybridTrafficSignDetector {
     }
 
     func detect(pixelBuffer: CVPixelBuffer, timestamp: TimeInterval) throws -> [TrafficSignObservation] {
-        if let directDetector {
-            let detections = try directDetector.detect(pixelBuffer: pixelBuffer, confidenceThreshold: 0.30)
-            let mapped = detections.compactMap { detection -> TrafficSignObservation? in
-                guard let kind = trafficSignKind(forClassID: detection.classID) else { return nil }
-                return TrafficSignObservation(
-                    kind: kind,
-                    confidence: detection.confidence,
-                    timestamp: timestamp
-                )
-            }
-
-            if !mapped.isEmpty {
-                // Never publish two competing speed limits from one frame. This was
-                // the main reason a single physical sign could produce LIMIT 60 + 80.
-                var result: [TrafficSignObservation] = []
-                if let bestSpeed = mapped.filter({
-                    if case .speedLimit = $0.kind { return true }
-                    return false
-                }).max(by: { $0.confidence < $1.confidence }) {
-                    result.append(bestSpeed)
-                }
-
-                if let bestArea = mapped.filter({
-                    switch $0.kind {
-                    case .denseAreaStart, .denseAreaEnd: return true
-                    case .speedLimit: return false
-                    }
-                }).max(by: { $0.confidence < $1.confidence }) {
-                    result.append(bestArea)
-                }
-                return result
-            }
+        guard let directDetector else {
+            return try fallback.detect(pixelBuffer: pixelBuffer, timestamp: timestamp)
         }
 
-        // Fallback is deliberately exclusive: it can recover a direct-model miss,
-        // but it can no longer compete with a valid YOLO speed result in the same frame.
-        let fallbackObservations = try fallback.detect(pixelBuffer: pixelBuffer, timestamp: timestamp)
-        var best: [TrafficSignKind: TrafficSignObservation] = [:]
-        for observation in fallbackObservations {
-            if best[observation.kind]?.confidence ?? 0 < observation.confidence {
-                best[observation.kind] = observation
-            }
+        let crop: CGRect?
+        let threshold: Float
+        switch scanPhase {
+        case 1:
+            // Left/center road zone. A 62%-wide crop makes a distant sign ~1.6x larger.
+            crop = CGRect(x: 0.0, y: 0.0, width: 0.62, height: 0.84)
+            threshold = 0.24
+        case 2:
+            // Right/center road zone; overlaps the left crop so center signs are not missed.
+            crop = CGRect(x: 0.38, y: 0.0, width: 0.62, height: 0.84)
+            threshold = 0.24
+        default:
+            crop = nil
+            threshold = 0.28
         }
-        return Array(best.values)
+        scanPhase = (scanPhase + 1) % 3
+
+        let detections = try directDetector.detect(
+            pixelBuffer: pixelBuffer,
+            normalizedCropTopLeft: crop,
+            confidenceThreshold: threshold
+        )
+        let mapped = detections.compactMap { detection -> TrafficSignObservation? in
+            guard let kind = trafficSignKind(forClassID: detection.classID) else { return nil }
+            return TrafficSignObservation(
+                kind: kind,
+                confidence: detection.confidence,
+                timestamp: timestamp
+            )
+        }
+
+        // Only one speed result from one inference pass is allowed into temporal tracking.
+        // OCR is intentionally NOT run when VN82 exists, because OCR competition was a
+        // remaining source of 60 <-> 80 flips when the direct model briefly missed.
+        var result: [TrafficSignObservation] = []
+        if let bestSpeed = mapped.filter({
+            if case .speedLimit = $0.kind { return true }
+            return false
+        }).max(by: { $0.confidence < $1.confidence }) {
+            result.append(bestSpeed)
+        }
+
+        if let bestArea = mapped.filter({
+            switch $0.kind {
+            case .denseAreaStart, .denseAreaEnd: return true
+            case .speedLimit: return false
+            }
+        }).max(by: { $0.confidence < $1.confidence }) {
+            result.append(bestArea)
+        }
+        return result
     }
 
     private func trafficSignKind(forClassID id: Int) -> TrafficSignKind? {
