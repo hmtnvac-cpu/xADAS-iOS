@@ -120,10 +120,16 @@ final class CameraManager: NSObject, ObservableObject {
         }
         session.addOutput(videoOutput)
 
+        // xADAS runs in landscape. The previous iOS 17 path forced 0° while
+        // the older path used landscapeRight. That meant Vision could receive
+        // a portrait-oriented pixel buffer even though the preview looked
+        // landscape, causing OCR/sign recognition to miss obvious signs.
+        // Normalize the *buffer* itself to landscapeRight so every Vision
+        // request can correctly use CGImagePropertyOrientation.up.
         if let connection = videoOutput.connection(with: .video) {
             if #available(iOS 17.0, *) {
-                if connection.isVideoRotationAngleSupported(0) {
-                    connection.videoRotationAngle = 0
+                if connection.isVideoRotationAngleSupported(90) {
+                    connection.videoRotationAngle = 90
                 }
             } else if connection.isVideoOrientationSupported {
                 connection.videoOrientation = .landscapeRight
