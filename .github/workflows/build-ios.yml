@@ -98,6 +98,18 @@ jobs:
             echo "70mai token secret is not configured; RTSP fallback remains available."
           fi
 
+      - name: Inject Mapbox access token
+        env:
+          MAPBOX_TOKEN: ${{ secrets.MAPBOX_ACCESS_TOKEN || secrets.MAPBOX_TOKEN || secrets.PUBLIC_MAPBOX_TOKEN || secrets.MAPBOX_PUBLIC_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "${MAPBOX_TOKEN:-}" ]; then
+            /usr/libexec/PlistBuddy -c "Set :MapboxAccessToken $MAPBOX_TOKEN" xADAS-iOS/Info.plist
+            echo "Mapbox token injected."
+          else
+            echo "Mapbox token secret was not found under the supported names."
+          fi
+
       - name: Verify deployment target before build
         run: |
           set -euo pipefail
@@ -142,12 +154,15 @@ jobs:
           test -f "$APP_PATH/VNTrafficSign82.onnx"
           CAMERA_USAGE=$(/usr/libexec/PlistBuddy -c 'Print :NSCameraUsageDescription' "$INFO")
           LOCAL_NETWORK_USAGE=$(/usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' "$INFO")
+          LOCATION_USAGE=$(/usr/libexec/PlistBuddy -c 'Print :NSLocationWhenInUseUsageDescription' "$INFO")
           MIN_OS=$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$INFO")
           echo "Camera usage: $CAMERA_USAGE"
           echo "Local network usage: $LOCAL_NETWORK_USAGE"
+          echo "Location usage: $LOCATION_USAGE"
           echo "Minimum OS: $MIN_OS"
           test -n "$CAMERA_USAGE"
           test -n "$LOCAL_NETWORK_USAGE"
+          test -n "$LOCATION_USAGE"
           test "$MIN_OS" = "16.0"
           xcrun vtool -show-build "$BIN"
 
@@ -155,19 +170,24 @@ jobs:
         run: |
           set -euo pipefail
           APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/xADAS-iOS.app"
+          INFO="$APP_PATH/Info.plist"
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO")
+          BUILD=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO")
+          NAME="xADAS-iOS-V${VERSION}-B${BUILD}-unsigned"
           mkdir -p "$RUNNER_TEMP/Payload"
           cp -R "$APP_PATH" "$RUNNER_TEMP/Payload/"
           cd "$RUNNER_TEMP"
-          /usr/bin/zip -qry xADAS-iOS-V0.9.8-unsigned.ipa Payload
-          shasum -a 256 xADAS-iOS-V0.9.8-unsigned.ipa > xADAS-iOS-V0.9.8-unsigned.sha256
+          /usr/bin/zip -qry "$NAME.ipa" Payload
+          shasum -a 256 "$NAME.ipa" > "$NAME.sha256"
+          echo "IPA_NAME=$NAME" >> "$GITHUB_ENV"
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: xADAS-iOS-V0.9.8-unsigned
+          name: ${{ env.IPA_NAME }}
           path: |
-            ${{ runner.temp }}/xADAS-iOS-V0.9.8-unsigned.ipa
-            ${{ runner.temp }}/xADAS-iOS-V0.9.8-unsigned.sha256
+            ${{ runner.temp }}/${{ env.IPA_NAME }}.ipa
+            ${{ runner.temp }}/${{ env.IPA_NAME }}.sha256
           if-no-files-found: error
           retention-days: 14
 
