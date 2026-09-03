@@ -9,6 +9,7 @@ struct SettingsView: View {
     @AppStorage(ADASWarningManager.vibrationKey) private var warningVibration = true
     @AppStorage(LeadDistanceTracker.referenceDistanceKey) private var referenceDistance: Double = 55
     @AppStorage(DistanceEstimator.cameraHeightKey) private var cameraHeight: Double = 1.25
+    @AppStorage(DistanceEstimator.seventyMaiFocalPixelsKey) private var seventyMaiFocalPixels: Double = 890
     @StateObject private var rtspProbe = RTSPProbe()
     @StateObject private var warningManager = ADASWarningManager()
 
@@ -60,7 +61,7 @@ struct SettingsView: View {
                         warningManager.testWarning()
                     }
 
-                    Text("xADAS warning volume is independent from the app logic, while iPhone media volume remains the final system output level.")
+                    Text("Driving warnings are experimental and gated above 60 km/h. Sign recognition itself remains active while stationary.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -70,11 +71,20 @@ struct SettingsView: View {
                         Text("Camera height: \(cameraHeight, specifier: "%.2f") m")
                         Slider(value: $cameraHeight, in: 0.60...2.00, step: 0.01)
                     }
+                    if cameraSourceRaw == CameraSourceChoice.seventyMai.rawValue {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("70mai focal: \(Int(seventyMaiFocalPixels)) px @1920")
+                            Slider(value: $seventyMaiFocalPixels, in: 500...1300, step: 10)
+                        }
+                        Text("Default 890 px replaces the advertised 140° viewing angle for distance geometry. Fine-tune only against a measured real distance.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Reference distance: \(Int(referenceDistance)) m")
                         Slider(value: $referenceDistance, in: 20...120, step: 5)
                     }
-                    Text("Re-run CALIBRATE after changing camera source because camera height, FOV and horizon differ between the iPhone and 70mai.")
+                    Text("Re-run CALIBRATE after changing camera source or camera position. Horizon/pitch and camera height directly affect ground-plane distance.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -89,6 +99,7 @@ struct SettingsView: View {
                     LabeledContent("Minimum iOS", value: "16.0")
                     LabeledContent("Video source", value: "70mai / iPhone selectable")
                     LabeledContent("Lane model", value: "UFLD V2 • on-device")
+                    LabeledContent("Distance", value: "Ground-plane + calibrated focal")
                 }
             }
             .navigationTitle("Settings")
