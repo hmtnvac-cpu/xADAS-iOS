@@ -12,10 +12,13 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
     private let speechSynthesizer = AVSpeechSynthesizer()
     private var lastDistanceAlertAt: TimeInterval = 0
     private var lastLaneAlertAt: TimeInterval = 0
+    private var lastOverspeedAlertAt: TimeInterval = 0
     private var lastSpeechAt: TimeInterval = 0
     private var lastSpokenKey = ""
     private var lastDistanceRisk: LeadDistanceRisk = .unavailable
     private var lastLaneState: LaneDepartureState = .unavailable
+    private var lastTrafficSignUpdatedAt: TimeInterval = 0
+    private var lastTrafficSign: TrafficSignKind?
 
     override init() {
         super.init()
@@ -39,9 +42,16 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
         UserDefaults.standard.bool(forKey: Self.vibrationKey)
     }
 
-    /// Audible/haptic warnings are experimental and are only active at highway
-    /// speed. Detection/HUD remain active at every speed; only alert output is gated.
-    func update(distance: LeadDistanceState, lane: LaneDepartureState, vehicleSpeedKPH: Double) {
+    /// Sign announcements are allowed while stationary so recognition can be tested.
+    /// Lane/distance/overspeed driving warnings remain gated to >60 km/h as requested.
+    func update(
+        distance: LeadDistanceState,
+        lane: LaneDepartureState,
+        trafficSign: TrafficSignState,
+        vehicleSpeedKPH: Double
+    ) {
+        announceNewTrafficSignIfNeeded(trafficSign)
+
         guard vehicleSpeedKPH > Self.minimumActiveSpeedKPH else {
             lastDistanceRisk = .unavailable
             lastLaneState = .unavailable
@@ -49,6 +59,17 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
         }
 
         let now = ProcessInfo.processInfo.systemUptime
+
+        if let limit = trafficSign.explicitSpeedLimitKPH,
+           vehicleSpeedKPH >= Double(limit) + 5.0,
+           now - lastOverspeedAlertAt >= 6.0 {
+            alert(
+                strong: true,
+                message: "Cảnh báo quá tốc độ. Giới hạn \(limit) ki lô mét một giờ",
+                key: "overspeed-\(limit)"
+            )
+            lastOverspeedAlertAt = now
+        }
 
         let distanceDangerDue = distance.risk == .danger
             && (lastDistanceRisk != .danger || now - lastDistanceAlertAt >= 2.0)
@@ -79,6 +100,40 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
         lastLaneState = lane
     }
 
+    private func announceNewTrafficSignIfNeeded(_ state: TrafficSignState) {
+        guard state.updatedAt > 0,
+              state.updatedAt != lastTrafficSignUpdatedAt,
+              let sign = state.lastConfirmedSign else { return }
+
+        lastTrafficSignUpdatedAt = state.updatedAt
+        guard sign != lastTrafficSign else { return }
+        lastTrafficSign = sign
+
+        switch sign {
+        case .speedLimit(let value):
+            alert(
+                strong: false,
+                message: "Giới hạn tốc độ \(value) ki lô mét một giờ",
+                key: "sign-limit-\(value)",
+                forceSpeech: true
+            )
+        case .denseAreaStart:
+            alert(
+                strong: false,
+                message: "Bắt đầu khu đông dân cư",
+                key: "sign-dense-start",
+                forceSpeech: true
+            )
+        case .denseAreaEnd:
+            alert(
+                strong: false,
+                message: "Hết khu đông dân cư",
+                key: "sign-dense-end",
+                forceSpeech: true
+            )
+        }
+    }
+
     /// Settings test intentionally bypasses the >60 km/h gate.
     func testWarning() {
         alert(strong: true, message: "Hệ thống cảnh báo hoạt động", key: "test", forceSpeech: true)
@@ -93,7 +148,7 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
         activateWarningAudio()
         let volume = warningVolume
         player?.currentTime = 0
-        player?.volume = volume
+        player?.volume = strong ? min(volume * 1.15, 1) : volume
         player?.play()
         if vibrationEnabled {
             AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
@@ -107,7 +162,7 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
         }
         let utterance = AVSpeechUtterance(string: message)
         utterance.voice = AVSpeechSynthesisVoice(language: "vi-VN")
-        utterance.rate = 0.48
+        utterance.rate = 0.50
         utterance.volume = volume
         speechSynthesizer.speak(utterance)
         lastSpokenKey = key
@@ -116,7 +171,7 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
 
     private func activateWarningAudio() {
         let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .voicePrompt, options: [.mixWithOthers])
+        try? session.setCategory(.playback, mode: .voicePrompt, options: [.mixWithOthers, .duckOthers])
         try? session.setActive(true)
     }
 
