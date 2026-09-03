@@ -24,6 +24,10 @@ final class FrameProcessor: ObservableObject {
     @Published private(set) var trafficSignStatus = "SIGN AI READY"
 
     var horizontalFieldOfViewDegrees: Double = 0
+    /// For dashcams whose advertised angle is diagonal/marketing FOV rather than
+    /// the decoded stream's usable pinhole horizontal FOV. Value is referenced
+    /// to a 1920-pixel-wide frame and scaled automatically for other resolutions.
+    var effectiveFocalPixelsAt1920: Double?
 
     private var totalFrames: UInt64 = 0
     private var lastPublishedAt = ProcessInfo.processInfo.systemUptime
@@ -165,7 +169,8 @@ final class FrameProcessor: ObservableObject {
                     for: leadBox,
                     frameWidth: width,
                     frameHeight: height,
-                    horizontalFieldOfViewDegrees: horizontalFieldOfViewDegrees
+                    horizontalFieldOfViewDegrees: horizontalFieldOfViewDegrees,
+                    effectiveFocalPixelsAt1920: effectiveFocalPixelsAt1920
                 )
                 let tracked = leadDistanceTracker.update(
                     rawDistance: rawDistance,
