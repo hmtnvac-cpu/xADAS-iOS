@@ -2,20 +2,32 @@ import SwiftUI
 
 struct DriveView: View {
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage(CameraSource.selectionKey) private var cameraSourceRaw = CameraSourceChoice.seventyMai.rawValue
     @State private var showCalibration = false
     @State private var showSettings = false
     @State private var rtspStatus = "70MAI STARTING"
     @State private var restartToken = UUID()
     @State private var useVLCFallback = false
     @StateObject private var frameProcessor = FrameProcessor()
+    @StateObject private var cameraManager = CameraManager()
     @StateObject private var warningManager = ADASWarningManager()
 
     private let seventyMaiURL = CameraSource.seventyMaiURL
 
+    private var selectedSource: CameraSourceChoice {
+        CameraSourceChoice(rawValue: cameraSourceRaw) ?? .seventyMai
+    }
+
+    private var activeProcessor: FrameProcessor {
+        selectedSource == .iPhone ? cameraManager.frameProcessor : frameProcessor
+    }
+
     var body: some View {
         ZStack {
             Group {
-                if useVLCFallback {
+                if selectedSource == .iPhone {
+                    CameraPreview(session: cameraManager.session)
+                } else if useVLCFallback {
                     SeventyMaiPlayerView(
                         urlString: seventyMaiURL,
                         restartToken: restartToken,
@@ -34,19 +46,19 @@ struct DriveView: View {
             .ignoresSafeArea()
 
             ADASOverlayView(
-                isCameraRunning: frameProcessor.frameWidth > 0 && frameProcessor.frameHeight > 0,
-                fps: frameProcessor.frameWidth > 0 ? 4.5 : 0,
-                pipelineStatus: rtspStatus,
-                detectorStatus: frameProcessor.detectorStatus,
-                inferenceMS: frameProcessor.inferenceMS,
-                frameWidth: frameProcessor.frameWidth,
-                frameHeight: frameProcessor.frameHeight,
-                detections: frameProcessor.detections,
-                leadDistanceState: frameProcessor.leadDistanceState,
+                isCameraRunning: activeProcessor.frameWidth > 0 && activeProcessor.frameHeight > 0,
+                fps: selectedSource == .iPhone ? cameraManager.fps : (frameProcessor.frameWidth > 0 ? 4.5 : 0),
+                pipelineStatus: selectedSource == .iPhone ? "IPHONE CAMERA ACTIVE" : rtspStatus,
+                detectorStatus: activeProcessor.detectorStatus,
+                inferenceMS: activeProcessor.inferenceMS,
+                frameWidth: activeProcessor.frameWidth,
+                frameHeight: activeProcessor.frameHeight,
+                detections: activeProcessor.detections,
+                leadDistanceState: activeProcessor.leadDistanceState,
                 horizonRatio: UserDefaults.standard.double(forKey: DistanceEstimator.horizonRatioKey),
-                laneDetection: frameProcessor.laneDetection,
-                laneStatus: frameProcessor.laneStatus,
-                laneDepartureState: frameProcessor.laneDepartureState
+                laneDetection: activeProcessor.laneDetection,
+                laneStatus: activeProcessor.laneStatus,
+                laneDepartureState: activeProcessor.laneDepartureState
             )
 
             if showCalibration {
@@ -56,7 +68,8 @@ struct DriveView: View {
             VStack {
                 Spacer()
 
-                if frameProcessor.frameWidth == 0 || frameProcessor.frameHeight == 0 {
+                if selectedSource == .seventyMai,
+                   (frameProcessor.frameWidth == 0 || frameProcessor.frameHeight == 0) {
                     Button("RETRY 70MAI") {
                         rtspStatus = "70MAI RETRYING"
                         useVLCFallback = false
@@ -82,28 +95,48 @@ struct DriveView: View {
             SettingsView()
         }
         .onAppear {
-            frameProcessor.horizontalFieldOfViewDegrees = 140
-            scheduleNativeFallbackCheck(for: restartToken)
+            configureSelectedSource()
+        }
+        .onChange(of: cameraSourceRaw) { _ in
+            configureSelectedSource()
         }
         .onChange(of: scenePhase) { phase in
             if phase == .active {
-                useVLCFallback = false
-                restartToken = UUID()
-                scheduleNativeFallbackCheck(for: restartToken)
+                configureSelectedSource()
+            } else if phase != .active, selectedSource == .iPhone {
+                cameraManager.stop()
             }
         }
-        .onChange(of: frameProcessor.leadDistanceState) { newValue in
-            warningManager.update(distance: newValue, lane: frameProcessor.laneDepartureState)
+        .onChange(of: activeProcessor.leadDistanceState) { newValue in
+            warningManager.update(distance: newValue, lane: activeProcessor.laneDepartureState)
         }
-        .onChange(of: frameProcessor.laneDepartureState) { newValue in
-            warningManager.update(distance: frameProcessor.leadDistanceState, lane: newValue)
+        .onChange(of: activeProcessor.laneDepartureState) { newValue in
+            warningManager.update(distance: activeProcessor.leadDistanceState, lane: newValue)
         }
         .persistentSystemOverlays(.hidden)
     }
 
+    private func configureSelectedSource() {
+        switch selectedSource {
+        case .seventyMai:
+            cameraManager.stop()
+            frameProcessor.horizontalFieldOfViewDegrees = 140
+            useVLCFallback = false
+            restartToken = UUID()
+            rtspStatus = "70MAI STARTING"
+            scheduleNativeFallbackCheck(for: restartToken)
+        case .iPhone:
+            useVLCFallback = false
+            rtspStatus = "IPHONE CAMERA ACTIVE"
+            cameraManager.start()
+        }
+    }
+
     private func scheduleNativeFallbackCheck(for token: UUID) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
-            guard restartToken == token, !useVLCFallback,
+            guard selectedSource == .seventyMai,
+                  restartToken == token,
+                  !useVLCFallback,
                   frameProcessor.frameWidth == 0 || frameProcessor.frameHeight == 0 else { return }
             rtspStatus = "70MAI VLC FALLBACK"
             useVLCFallback = true
