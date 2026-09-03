@@ -11,6 +11,7 @@ struct DriveView: View {
     @StateObject private var frameProcessor = FrameProcessor()
     @StateObject private var cameraManager = CameraManager()
     @StateObject private var warningManager = ADASWarningManager()
+    @StateObject private var vehicleSpeedMonitor = VehicleSpeedMonitor()
 
     private let seventyMaiURL = CameraSource.seventyMaiURL
 
@@ -97,22 +98,41 @@ struct DriveView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView()
         }
-        .onAppear { configureSelectedSource() }
+        .onAppear {
+            vehicleSpeedMonitor.start()
+            configureSelectedSource()
+        }
         .onChange(of: cameraSourceRaw) { _ in configureSelectedSource() }
         .onChange(of: scenePhase) { phase in
             if phase == .active {
+                vehicleSpeedMonitor.start()
                 configureSelectedSource()
-            } else if phase != .active, selectedSource == .iPhone {
-                cameraManager.stop()
+            } else {
+                vehicleSpeedMonitor.stop()
+                if selectedSource == .iPhone { cameraManager.stop() }
             }
         }
         .onChange(of: activeProcessor.leadDistanceState) { newValue in
-            warningManager.update(distance: newValue, lane: activeProcessor.laneDepartureState)
+            updateWarnings(distance: newValue, lane: activeProcessor.laneDepartureState)
         }
         .onChange(of: activeProcessor.laneDepartureState) { newValue in
-            warningManager.update(distance: activeProcessor.leadDistanceState, lane: newValue)
+            updateWarnings(distance: activeProcessor.leadDistanceState, lane: newValue)
+        }
+        .onChange(of: vehicleSpeedMonitor.speedKPH) { _ in
+            updateWarnings(
+                distance: activeProcessor.leadDistanceState,
+                lane: activeProcessor.laneDepartureState
+            )
         }
         .persistentSystemOverlays(.hidden)
+    }
+
+    private func updateWarnings(distance: LeadDistanceState, lane: LaneDepartureState) {
+        warningManager.update(
+            distance: distance,
+            lane: lane,
+            vehicleSpeedKPH: vehicleSpeedMonitor.speedKPH
+        )
     }
 
     private func configureSelectedSource() {
