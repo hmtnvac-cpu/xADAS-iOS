@@ -51,11 +51,9 @@ final class TrafficSignStateTracker {
     }
 
     private var candidates: [TrafficSignKind: Candidate] = [:]
-    // Dashcam signs can be visible clearly for less than one second. Requiring
-    // three high-confidence hits caused real signs to disappear before lock.
-    private let minimumConfidence: Float = 0.48
+    private let minimumConfidence: Float = 0.42
     private let requiredHits = 2
-    private let confirmationWindow: TimeInterval = 2.0
+    private let confirmationWindow: TimeInterval = 2.2
 
     func ingest(_ observation: TrafficSignObservation) -> TrafficSignState {
         guard observation.confidence >= minimumConfidence else { return state }
