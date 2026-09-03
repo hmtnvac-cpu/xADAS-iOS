@@ -16,13 +16,15 @@ struct ADASOverlayView: View {
     let laneDetection: LaneDetection?
     let laneStatus: String
     let laneDepartureState: LaneDepartureState
+    let trafficSignState: TrafficSignState
+    let trafficSignStatus: String
 
     var body: some View {
         GeometryReader { proxy in
             ZStack {
                 VStack {
                     HStack(alignment: .top) {
-                        VStack(alignment: .leading, spacing: 3) {
+                        VStack(alignment: .leading, spacing: 5) {
                             Text("xADAS")
                                 .font(.headline.bold())
                             HStack(spacing: 5) {
@@ -32,16 +34,30 @@ struct ADASOverlayView: View {
                                 Text(cameraLabel)
                                     .font(.caption2.monospaced().bold())
                             }
+
+                            HStack(spacing: 7) {
+                                speedLimitBadge
+                                Text(trafficSignState.areaLabel)
+                                    .font(.caption2.monospaced().bold())
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 4)
+                                    .background(.black.opacity(0.56), in: Capsule())
+                            }
                         }
 
                         Spacer()
 
-                        HStack(spacing: 5) {
-                            Circle()
-                                .fill(laneIndicatorColor)
-                                .frame(width: 7, height: 7)
-                            Text(laneIndicatorText)
+                        VStack(alignment: .trailing, spacing: 5) {
+                            HStack(spacing: 5) {
+                                Circle()
+                                    .fill(laneIndicatorColor)
+                                    .frame(width: 7, height: 7)
+                                Text(laneIndicatorText)
+                                    .font(.caption2.monospaced().bold())
+                            }
+                            Text(signIndicatorText)
                                 .font(.caption2.monospaced().bold())
+                                .foregroundStyle(trafficSignStatus.contains("ERROR") ? .red : .white.opacity(0.78))
                         }
                     }
                     .padding(.horizontal, 20)
@@ -58,23 +74,11 @@ struct ADASOverlayView: View {
                     laneOverlay(laneDetection, in: proxy.size)
                 }
 
-                if let distance = leadDistanceState.distanceMeters {
-                    Text(String(format: "%.1f m", distance))
-                        .font(.system(size: 34, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 7)
-                        .background(distanceColor.opacity(0.86), in: RoundedRectangle(cornerRadius: 12))
-                        .position(x: proxy.size.width / 2, y: proxy.size.height * 0.43)
-                } else if isCameraRunning {
-                    Text("-- m")
-                        .font(.system(size: 30, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.75))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 6)
-                        .background(.black.opacity(0.48), in: RoundedRectangle(cornerRadius: 10))
-                        .position(x: proxy.size.width / 2, y: proxy.size.height * 0.43)
-                }
+                // Keep distance information out of the road center. This small
+                // HUD sits near the lower-right edge where it does not cover the
+                // lead vehicle, lane convergence point or upcoming traffic signs.
+                compactDistanceHUD
+                    .position(x: proxy.size.width - 62, y: proxy.size.height - 68)
 
                 if let warning = laneDepartureState.displayText {
                     Text("⚠︎ \(warning)")
@@ -91,15 +95,39 @@ struct ADASOverlayView: View {
         .allowsHitTesting(false)
     }
 
+    private var speedLimitBadge: some View {
+        ZStack {
+            Circle()
+                .fill(.white)
+                .overlay(Circle().stroke(.red, lineWidth: 3.5))
+                .frame(width: 38, height: 38)
+            Text(trafficSignState.explicitSpeedLimitKPH.map(String.init) ?? "--")
+                .font(.system(size: trafficSignState.explicitSpeedLimitKPH == nil ? 13 : 14, weight: .black, design: .rounded))
+                .foregroundStyle(.black)
+        }
+    }
+
+    private var compactDistanceHUD: some View {
+        HStack(spacing: 5) {
+            Text("DIST")
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.72))
+            Text(leadDistanceState.distanceMeters.map { String(format: "%.1fm", $0) } ?? "--m")
+                .font(.system(size: 16, weight: .black, design: .rounded))
+                .foregroundStyle(.white)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .background(distanceColor.opacity(leadDistanceState.distanceMeters == nil ? 0.48 : 0.86), in: RoundedRectangle(cornerRadius: 8))
+    }
+
     private var cameraLabel: String {
         if isCameraRunning { return cameraName.uppercased() }
         if pipelineStatus.contains("NO RTP") { return "NO RTP" }
         if pipelineStatus.contains("RTP RECEIVING") { return "DECODING" }
         if pipelineStatus.contains("WAITING RTP") { return "WAITING RTP" }
         if pipelineStatus.contains("SETUP") { return "RTSP READY" }
-        if pipelineStatus.contains("FAILED") || pipelineStatus.contains("ERROR") {
-            return "CAMERA ERROR"
-        }
+        if pipelineStatus.contains("FAILED") || pipelineStatus.contains("ERROR") { return "CAMERA ERROR" }
         return "CONNECTING"
     }
 
@@ -112,11 +140,17 @@ struct ADASOverlayView: View {
         return "LANE AI • READY"
     }
 
+    private var signIndicatorText: String {
+        if trafficSignStatus.contains("ERROR") { return "SIGN AI • ERROR" }
+        if trafficSignStatus.contains("LIMIT") || trafficSignStatus.contains("R420") || trafficSignStatus.contains("R421") {
+            return trafficSignStatus
+        }
+        return "SIGN AI • SEARCH"
+    }
+
     private var laneIndicatorColor: Color {
         if laneStatus.contains("ACTIVE") { return .green }
-        if laneStatus.contains("ERROR") || laneStatus.contains("missing") || laneStatus.contains("Missing") {
-            return .red
-        }
+        if laneStatus.contains("ERROR") || laneStatus.contains("missing") || laneStatus.contains("Missing") { return .red }
         return .yellow
     }
 
@@ -125,7 +159,7 @@ struct ADASOverlayView: View {
         case .safe: return .green
         case .caution: return .orange
         case .danger: return .red
-        case .unavailable: return .gray
+        case .unavailable: return .black
         }
     }
 
@@ -180,9 +214,6 @@ struct ADASOverlayView: View {
         }
     }
 
-    /// UFLD returns discrete row anchors. Drawing those raw points directly
-    /// produced the saw-tooth/zig-zag lane seen on the real 70mai screen.
-    /// Smooth x over nearby anchors and reject isolated large jumps.
     private func stabilizedLanePoints(_ input: [CGPoint]) -> [CGPoint] {
         let sorted = input.sorted { $0.y < $1.y }
         guard sorted.count >= 5 else { return sorted }
