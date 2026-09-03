@@ -2,11 +2,12 @@ import Combine
 import CoreLocation
 import Foundation
 
-/// GPS speed source used only to gate experimental audible/haptic ADAS warnings.
-/// Camera recognition continues to run while the vehicle is stationary.
+/// GPS source for vehicle speed and road-map matching.
 final class VehicleSpeedMonitor: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published private(set) var speedKPH: Double = 0
     @Published private(set) var authorizationStatus: CLAuthorizationStatus
+    @Published private(set) var latestLocation: CLLocation?
+    @Published private(set) var courseDegrees: Double?
 
     private let manager = CLLocationManager()
     private var filteredSpeedKPH: Double = 0
@@ -30,8 +31,10 @@ final class VehicleSpeedMonitor: NSObject, ObservableObject, CLLocationManagerDe
             manager.startUpdatingLocation()
         case .denied, .restricted:
             speedKPH = 0
+            latestLocation = nil
         @unknown default:
             speedKPH = 0
+            latestLocation = nil
         }
     }
 
@@ -51,14 +54,11 @@ final class VehicleSpeedMonitor: NSObject, ObservableObject, CLLocationManagerDe
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let location = locations.last,
               location.horizontalAccuracy >= 0,
-              location.horizontalAccuracy <= 50,
-              location.speed >= 0 else { return }
+              location.horizontalAccuracy <= 50 else { return }
 
-        let rawKPH = location.speed * 3.6
+        let rawKPH = location.speed >= 0 ? location.speed * 3.6 : 0
         let bounded = min(max(rawKPH, 0), 250)
 
-        // Light smoothing avoids GPS jitter around the 60 km/h activation point
-        // while still reacting in roughly one update when entering highway speed.
         if hasSpeedSample {
             filteredSpeedKPH = filteredSpeedKPH * 0.65 + bounded * 0.35
         } else {
@@ -66,13 +66,16 @@ final class VehicleSpeedMonitor: NSObject, ObservableObject, CLLocationManagerDe
             hasSpeedSample = true
         }
 
+        let course = location.course >= 0 ? location.course : nil
         DispatchQueue.main.async { [weak self] in
-            self?.speedKPH = self?.filteredSpeedKPH ?? 0
+            guard let self else { return }
+            self.speedKPH = self.filteredSpeedKPH
+            self.latestLocation = location
+            self.courseDegrees = course
         }
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        // No valid GPS speed means warnings remain gated off for safety.
         DispatchQueue.main.async { [weak self] in
             self?.speedKPH = 0
         }
