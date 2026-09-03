@@ -32,9 +32,9 @@ final class FrameProcessor: ObservableObject {
     private var signFrameCounter = 0
     private let inferenceStride = 2
     private let laneStride = 2
-    // Traffic signs persist for many frames. Running OCR/shape recognition at a
-    // lower cadence keeps lane + lead latency low while still confirming signs quickly.
-    private let signStride = 8
+    // Sign recognition must run often enough for a moving car to get at least
+    // two confirmations before the roadside sign leaves the frame.
+    private let signStride = 4
     private var lastVehicleSeenAt: TimeInterval = 0
     private var lastLaneSeenAt: TimeInterval = 0
     private let detector: VehicleDetector?
@@ -239,8 +239,6 @@ final class FrameProcessor: ObservableObject {
         }
     }
 
-    /// Select only a vehicle whose road-contact point is inside the two
-    /// detected ego-lane boundaries. No lane means no distance warning.
     private func leadVehicleIndex(
         in detections: [VehicleDetection],
         lane: LaneDetection
