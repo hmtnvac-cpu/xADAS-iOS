@@ -15,26 +15,12 @@ final class TrafficSignDetector {
 
     func detect(pixelBuffer: CVPixelBuffer, timestamp: TimeInterval) throws -> [TrafficSignObservation] {
         var observations: [TrafficSignObservation] = []
-
-        // Primary path: find red circular roadside sign candidates first, crop
-        // them, upscale them, then OCR only the sign. Full-frame OCR was the
-        // main reason real 70mai speed signs were missed at normal distance.
-        observations.append(contentsOf: try detectSpeedSignsByRedCandidates(
-            pixelBuffer: pixelBuffer,
-            timestamp: timestamp
-        ))
-
-        // Fallback path catches washed-out signs whose red ring is weak.
-        observations.append(contentsOf: try detectSpeedLimitsByZoneOCR(
-            pixelBuffer: pixelBuffer,
-            timestamp: timestamp
-        ))
-
+        observations.append(contentsOf: try detectSpeedSignsByRedCandidates(pixelBuffer: pixelBuffer, timestamp: timestamp))
+        observations.append(contentsOf: try detectSpeedLimitsByZoneOCR(pixelBuffer: pixelBuffer, timestamp: timestamp))
         if let dense = try detectDenseAreaSign(pixelBuffer: pixelBuffer, timestamp: timestamp) {
             observations.append(dense)
         }
 
-        // Keep the strongest observation for each exact sign kind.
         var best: [TrafficSignKind: TrafficSignObservation] = [:]
         for observation in observations {
             if best[observation.kind]?.confidence ?? 0 < observation.confidence {
@@ -43,8 +29,6 @@ final class TrafficSignDetector {
         }
         return Array(best.values)
     }
-
-    // MARK: - Speed limit: red candidate -> crop -> OCR
 
     private func detectSpeedSignsByRedCandidates(
         pixelBuffer: CVPixelBuffer,
@@ -57,7 +41,6 @@ final class TrafficSignDetector {
             guard let appearance = appearance(in: rect, pixelBuffer: pixelBuffer),
                   appearance.redRatio >= 0.012,
                   appearance.brightRatio >= 0.08 else { continue }
-
             guard let speedResult = try recognizeSpeed(in: rect, pixelBuffer: pixelBuffer) else { continue }
 
             let visualBonus = min(0.28, appearance.redRatio * 2.8 + appearance.brightRatio * 0.18)
@@ -100,7 +83,7 @@ final class TrafficSignDetector {
         request.usesLanguageCorrection = false
         request.recognitionLanguages = ["en-US"]
         request.customWords = allowedSpeeds.map(String.init)
-        request.minimumTextHeight = 0.06
+        request.minimumTextHeight = 0.05
 
         let handler = VNImageRequestHandler(ciImage: enlarged, orientation: .up, options: [:])
         try handler.perform([request])
@@ -116,8 +99,6 @@ final class TrafficSignDetector {
         return best
     }
 
-    /// Downsample the frame and find connected red-ring blobs. The mask is
-    /// dilated one pixel so a blurred/broken ring still becomes one candidate.
     private func redSignCandidates(pixelBuffer: CVPixelBuffer) -> [CGRect] {
         let targetWidth = 320
         let targetHeight = 180
@@ -148,8 +129,6 @@ final class TrafficSignDetector {
                 let r = Int(rgba[p])
                 let g = Int(rgba[p + 1])
                 let b = Int(rgba[p + 2])
-                // Broad enough for 70mai compression and sunlight, but still
-                // demands red dominance over green/blue.
                 rawMask[i] = r >= 92 && r >= g + 20 && r >= b + 16
             }
         }
@@ -206,9 +185,7 @@ final class TrafficSignDetector {
 
                 let w = maxX - minX + 1
                 let h = maxY - minY + 1
-                guard pixels >= 5,
-                      w >= 3, h >= 3,
-                      w <= 52, h <= 52 else { continue }
+                guard pixels >= 5, w >= 3, h >= 3, w <= 52, h <= 52 else { continue }
 
                 let aspect = Double(w) / Double(h)
                 guard aspect >= 0.48, aspect <= 2.05 else { continue }
@@ -225,13 +202,8 @@ final class TrafficSignDetector {
                     height: side / Double(targetHeight)
                 ).intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
 
-                // Ignore the bottom dashboard/bonnet region and microscopic or
-                // huge red objects that cannot be a traffic sign.
-                guard rect.midY >= 0.22,
-                      rect.width >= 0.018,
-                      rect.width <= 0.22 else { continue }
+                guard rect.midY >= 0.22, rect.width >= 0.018, rect.width <= 0.22 else { continue }
 
-                // Keep crop square in normalized image coordinates as much as possible.
                 let normalizedSide = max(rect.width, rect.height)
                 rect = CGRect(
                     x: rect.midX - normalizedSide / 2,
@@ -248,8 +220,6 @@ final class TrafficSignDetector {
 
         return candidates.sorted { $0.score > $1.score }.map(\.rect)
     }
-
-    // MARK: - Fallback speed OCR
 
     private func detectSpeedLimitsByZoneOCR(
         pixelBuffer: CVPixelBuffer,
@@ -271,8 +241,26 @@ final class TrafficSignDetector {
 
             guard let results = request.results else { continue }
             for result in results {
-                for candidate in result.topCandidates(3) {
+                for candidate in result.topCandidates(5) {
                     guard let speed = normalizedSpeed(from: candidate.string) else { continue }
+
+                    // Critical test path: when Vision reads an exact supported
+                    // speed with high confidence, accept it even if the red-ring
+                    // color test is weakened by another phone screen, glare or
+                    // compression. Temporal tracking still requires the same
+                    // value on a second pass before the HUD locks.
+                    if isExactSpeedText(candidate.string, speed: speed), candidate.confidence >= 0.68 {
+                        let observation = TrafficSignObservation(
+                            kind: .speedLimit(speed),
+                            confidence: candidate.confidence,
+                            timestamp: timestamp
+                        )
+                        if bestBySpeed[speed]?.confidence ?? 0 < observation.confidence {
+                            bestBySpeed[speed] = observation
+                        }
+                        break
+                    }
+
                     let fullBox = fullImageRect(result.boundingBox, in: zone)
                     let sampleRect = expandedSignRect(around: fullBox)
                     guard let a = appearance(in: sampleRect, pixelBuffer: pixelBuffer),
@@ -288,6 +276,12 @@ final class TrafficSignDetector {
             }
         }
         return Array(bestBySpeed.values)
+    }
+
+    private func isExactSpeedText(_ text: String, speed: Int) -> Bool {
+        let compact = text.uppercased().filter { $0.isNumber || $0 == "O" || $0 == "Q" || $0 == "D" || $0 == "I" || $0 == "L" || $0 == "B" }
+        guard let normalized = normalizedSpeed(from: compact) else { return false }
+        return normalized == speed && compact.count >= 2 && compact.count <= 3
     }
 
     private func normalizedSpeed(from text: String) -> Int? {
@@ -307,8 +301,6 @@ final class TrafficSignDetector {
         for speed in allowedSpeeds.sorted(by: >) where normalized.contains(String(speed)) { return speed }
         return nil
     }
-
-    // MARK: - Dense population area R.420 / R.421
 
     private func detectDenseAreaSign(
         pixelBuffer: CVPixelBuffer,
@@ -338,9 +330,6 @@ final class TrafficSignDetector {
             let expanded = box.insetBy(dx: -box.width * 0.08, dy: -box.height * 0.08)
                 .intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
             guard let a = appearance(in: expanded, pixelBuffer: pixelBuffer) else { continue }
-
-            // White rectangular board + dark settlement silhouette. R.421 has
-            // the red diagonal slash, so red density separates end/start.
             guard a.brightRatio >= 0.18,
                   a.darkRatio >= 0.022,
                   a.darkRatio <= 0.62 else { continue }
@@ -357,8 +346,6 @@ final class TrafficSignDetector {
         }
         return best
     }
-
-    // MARK: - Shared helpers
 
     private func fullImageRect(_ roiRelativeBox: CGRect, in roi: CGRect) -> CGRect {
         CGRect(
