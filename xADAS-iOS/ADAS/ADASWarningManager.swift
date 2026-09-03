@@ -5,6 +5,7 @@ import Foundation
 
 final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegate, AVSpeechSynthesizerDelegate {
     static let volumeKey = "xadas.warning.volume"
+    static let vibrationKey = "xadas.warning.vibration"
 
     private var player: AVAudioPlayer?
     private let speechSynthesizer = AVSpeechSynthesizer()
@@ -20,6 +21,9 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
         if UserDefaults.standard.object(forKey: Self.volumeKey) == nil {
             UserDefaults.standard.set(0.35, forKey: Self.volumeKey)
         }
+        if UserDefaults.standard.object(forKey: Self.vibrationKey) == nil {
+            UserDefaults.standard.set(true, forKey: Self.vibrationKey)
+        }
         player = try? AVAudioPlayer(data: Self.makeBeepWAV())
         player?.delegate = self
         player?.prepareToPlay()
@@ -28,6 +32,10 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
 
     private var warningVolume: Float {
         Float(min(max(UserDefaults.standard.double(forKey: Self.volumeKey), 0), 1))
+    }
+
+    private var vibrationEnabled: Bool {
+        UserDefaults.standard.bool(forKey: Self.vibrationKey)
     }
 
     func update(distance: LeadDistanceState, lane: LaneDepartureState) {
@@ -77,7 +85,9 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
         player?.currentTime = 0
         player?.volume = volume
         player?.play()
-        AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
+        if vibrationEnabled {
+            AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
+        }
 
         let now = ProcessInfo.processInfo.systemUptime
         guard forceSpeech || key != lastSpokenKey || now - lastSpeechAt >= 5.0 else { return }
