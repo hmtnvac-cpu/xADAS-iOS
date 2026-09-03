@@ -45,7 +45,25 @@ final class VNTrafficSign82Detector {
     }
 
     func detect(pixelBuffer: CVPixelBuffer, confidenceThreshold: Float = 0.24) throws -> [VN82Detection] {
-        let prepared = try makeInput(pixelBuffer: pixelBuffer)
+        try detect(
+            pixelBuffer: pixelBuffer,
+            normalizedCropTopLeft: nil,
+            confidenceThreshold: confidenceThreshold
+        )
+    }
+
+    /// Runs the same 640x640 model on a normalized crop. Cropping before resize makes
+    /// small/distant roadside signs occupy substantially more model pixels without
+    /// changing the ONNX model itself.
+    func detect(
+        pixelBuffer: CVPixelBuffer,
+        normalizedCropTopLeft: CGRect?,
+        confidenceThreshold: Float = 0.24
+    ) throws -> [VN82Detection] {
+        let prepared = try makeInput(
+            pixelBuffer: pixelBuffer,
+            normalizedCropTopLeft: normalizedCropTopLeft
+        )
         let inputData = prepared.tensor.withUnsafeBufferPointer { Data(buffer: $0) }
         let inputValue = try ORTValue(
             tensorData: NSMutableData(data: inputData),
@@ -111,7 +129,7 @@ final class VNTrafficSign82Detector {
             let y1Bottom = min(max(sourceBottom / prepared.sourceHeight, 0), 1)
             let width = x1 - x0
             let height = y1Bottom - y0Top
-            guard width > 0.004, height > 0.004 else { continue }
+            guard width > 0.003, height > 0.003 else { continue }
 
             let visionBox = CGRect(
                 x: CGFloat(x0),
@@ -134,10 +152,37 @@ final class VNTrafficSign82Detector {
         let sourceHeight: Double
     }
 
-    private func makeInput(pixelBuffer: CVPixelBuffer) throws -> PreparedInput {
-        let sourceWidth = Double(CVPixelBufferGetWidth(pixelBuffer))
-        let sourceHeight = Double(CVPixelBufferGetHeight(pixelBuffer))
-        guard sourceWidth > 0, sourceHeight > 0 else { throw VNTrafficSign82Error.invalidFrame }
+    private func makeInput(
+        pixelBuffer: CVPixelBuffer,
+        normalizedCropTopLeft: CGRect?
+    ) throws -> PreparedInput {
+        let fullWidth = Double(CVPixelBufferGetWidth(pixelBuffer))
+        let fullHeight = Double(CVPixelBufferGetHeight(pixelBuffer))
+        guard fullWidth > 0, fullHeight > 0 else { throw VNTrafficSign82Error.invalidFrame }
+
+        var source = CIImage(cvPixelBuffer: pixelBuffer)
+        var sourceWidth = fullWidth
+        var sourceHeight = fullHeight
+
+        if let requested = normalizedCropTopLeft {
+            let normalized = requested.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+            guard !normalized.isNull, normalized.width > 0.2, normalized.height > 0.2 else {
+                throw VNTrafficSign82Error.invalidFrame
+            }
+
+            let cropX = Double(normalized.minX) * fullWidth
+            let cropWidth = Double(normalized.width) * fullWidth
+            let cropHeight = Double(normalized.height) * fullHeight
+            // Caller expresses Y from the top of the camera image; Core Image uses bottom-left.
+            let cropY = fullHeight - Double(normalized.maxY) * fullHeight
+            let cropRect = CGRect(x: cropX, y: cropY, width: cropWidth, height: cropHeight)
+
+            source = source
+                .cropped(to: cropRect)
+                .transformed(by: CGAffineTransform(translationX: -cropRect.minX, y: -cropRect.minY))
+            sourceWidth = cropWidth
+            sourceHeight = cropHeight
+        }
 
         let scale = min(Double(Self.inputSize) / sourceWidth, Double(Self.inputSize) / sourceHeight)
         let resizedWidth = sourceWidth * scale
@@ -159,7 +204,6 @@ final class VNTrafficSign82Detector {
             throw VNTrafficSign82Error.invalidFrame
         }
 
-        let source = CIImage(cvPixelBuffer: pixelBuffer)
         let resized = source.transformed(by: CGAffineTransform(
             scaleX: CGFloat(scale),
             y: CGFloat(scale)
