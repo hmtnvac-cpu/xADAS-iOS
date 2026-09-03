@@ -6,6 +6,7 @@ import Foundation
 final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegate, AVSpeechSynthesizerDelegate {
     static let volumeKey = "xadas.warning.volume"
     static let vibrationKey = "xadas.warning.vibration"
+    static let minimumActiveSpeedKPH = 60.0
 
     private var player: AVAudioPlayer?
     private let speechSynthesizer = AVSpeechSynthesizer()
@@ -38,7 +39,15 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
         UserDefaults.standard.bool(forKey: Self.vibrationKey)
     }
 
-    func update(distance: LeadDistanceState, lane: LaneDepartureState) {
+    /// Audible/haptic warnings are experimental and are only active at highway
+    /// speed. Detection/HUD remain active at every speed; only alert output is gated.
+    func update(distance: LeadDistanceState, lane: LaneDepartureState, vehicleSpeedKPH: Double) {
+        guard vehicleSpeedKPH > Self.minimumActiveSpeedKPH else {
+            lastDistanceRisk = .unavailable
+            lastLaneState = .unavailable
+            return
+        }
+
         let now = ProcessInfo.processInfo.systemUptime
 
         let distanceDangerDue = distance.risk == .danger
@@ -70,6 +79,7 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
         lastLaneState = lane
     }
 
+    /// Settings test intentionally bypasses the >60 km/h gate.
     func testWarning() {
         alert(strong: true, message: "Hệ thống cảnh báo hoạt động", key: "test", forceSpeech: true)
     }
