@@ -7,6 +7,15 @@ final class TrafficSignDetector {
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
     private let allowedSpeeds = Set(stride(from: 20, through: 120, by: 10))
 
+    // Search the places where VN traffic signs actually appear: left roadside,
+    // right roadside and overhead/gantry. We deliberately overlap zones so a
+    // sign close to the optical centre is not missed.
+    private let speedSearchZones: [CGRect] = [
+        CGRect(x: 0.00, y: 0.22, width: 0.42, height: 0.76),
+        CGRect(x: 0.58, y: 0.22, width: 0.42, height: 0.76),
+        CGRect(x: 0.20, y: 0.45, width: 0.60, height: 0.53)
+    ]
+
     func detect(pixelBuffer: CVPixelBuffer, timestamp: TimeInterval) throws -> [TrafficSignObservation] {
         var observations: [TrafficSignObservation] = []
         observations.append(contentsOf: try detectSpeedLimits(pixelBuffer: pixelBuffer, timestamp: timestamp))
@@ -20,45 +29,88 @@ final class TrafficSignDetector {
         pixelBuffer: CVPixelBuffer,
         timestamp: TimeInterval
     ) throws -> [TrafficSignObservation] {
-        let request = VNRecognizeTextRequest()
-        request.recognitionLevel = .fast
-        request.usesLanguageCorrection = false
-        request.recognitionLanguages = ["en-US"]
-        request.minimumTextHeight = 0.018
-        request.customWords = allowedSpeeds.map(String.init)
-
-        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
-        try handler.perform([request])
-
-        guard let results = request.results else { return [] }
         var bestBySpeed: [Int: TrafficSignObservation] = [:]
 
-        for result in results {
-            guard result.boundingBox.midY > 0.24,
-                  let candidate = result.topCandidates(1).first else { continue }
+        for zone in speedSearchZones {
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            request.usesLanguageCorrection = false
+            request.recognitionLanguages = ["en-US"]
+            // The old value (0.018) rejected small signs at normal driving
+            // distance. 0.004 keeps ~8 px text on a 1080p frame eligible.
+            request.minimumTextHeight = 0.004
+            request.customWords = allowedSpeeds.map(String.init)
+            request.regionOfInterest = zone
 
-            let digits = candidate.string.filter(\.isNumber)
-            guard let speed = Int(digits), allowedSpeeds.contains(speed) else { continue }
+            let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
+            try handler.perform([request])
 
-            let sampleRect = expandedSignRect(around: result.boundingBox)
-            guard let appearance = appearance(in: sampleRect, pixelBuffer: pixelBuffer) else { continue }
-            guard appearance.redRatio >= 0.014,
-                  appearance.brightRatio >= 0.16 else { continue }
+            guard let results = request.results else { continue }
+            for result in results {
+                // Try several OCR hypotheses. Dashcam blur often makes 60 look
+                // like 6O, 80 like BO, or 100 like 1OO.
+                for candidate in result.topCandidates(3) {
+                    guard let speed = normalizedSpeed(from: candidate.string) else { continue }
 
-            let visualBonus = min(0.18, appearance.redRatio * 2.2 + appearance.brightRatio * 0.12)
-            let confidence = min(0.99, candidate.confidence + Float(visualBonus))
-            let observation = TrafficSignObservation(
-                kind: .speedLimit(speed),
-                confidence: confidence,
-                timestamp: timestamp
-            )
+                    let fullBox = fullImageRect(result.boundingBox, in: zone)
+                    let sampleRect = expandedSignRect(around: fullBox)
+                    guard let appearance = appearance(in: sampleRect, pixelBuffer: pixelBuffer) else { continue }
 
-            if bestBySpeed[speed]?.confidence ?? 0 < confidence {
-                bestBySpeed[speed] = observation
+                    // Keep the visual gate, but make it tolerant enough for
+                    // distant/washed-out 70mai frames. Temporal tracking will
+                    // reject one-frame false positives later.
+                    guard appearance.redRatio >= 0.004,
+                          appearance.brightRatio >= 0.08 else { continue }
+
+                    let visualBonus = min(0.24, appearance.redRatio * 3.4 + appearance.brightRatio * 0.16)
+                    let confidence = min(0.99, candidate.confidence + Float(visualBonus))
+                    guard confidence >= 0.46 else { continue }
+
+                    let observation = TrafficSignObservation(
+                        kind: .speedLimit(speed),
+                        confidence: confidence,
+                        timestamp: timestamp
+                    )
+                    if bestBySpeed[speed]?.confidence ?? 0 < confidence {
+                        bestBySpeed[speed] = observation
+                    }
+                    break
+                }
             }
         }
 
         return Array(bestBySpeed.values)
+    }
+
+    private func normalizedSpeed(from text: String) -> Int? {
+        let upper = text.uppercased()
+        var normalized = ""
+        for character in upper {
+            switch character {
+            case "0"..."9": normalized.append(character)
+            case "O", "Q", "D": normalized.append("0")
+            case "I", "L", "|": normalized.append("1")
+            case "B": normalized.append("8")
+            default: continue
+            }
+        }
+
+        // Prefer an exact supported value, then look for one embedded in OCR
+        // noise such as "(80)" or "MAX80".
+        if let value = Int(normalized), allowedSpeeds.contains(value) { return value }
+        for speed in allowedSpeeds.sorted(by: >) {
+            if normalized.contains(String(speed)) { return speed }
+        }
+        return nil
+    }
+
+    private func fullImageRect(_ roiRelativeBox: CGRect, in roi: CGRect) -> CGRect {
+        CGRect(
+            x: roi.minX + roiRelativeBox.minX * roi.width,
+            y: roi.minY + roiRelativeBox.minY * roi.height,
+            width: roiRelativeBox.width * roi.width,
+            height: roiRelativeBox.height * roi.height
+        ).intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
     }
 
     private func detectDenseAreaSign(
@@ -66,12 +118,12 @@ final class TrafficSignDetector {
         timestamp: TimeInterval
     ) throws -> TrafficSignObservation? {
         let request = VNDetectRectanglesRequest()
-        request.maximumObservations = 10
-        request.minimumAspectRatio = 0.72
-        request.maximumAspectRatio = 2.6
-        request.minimumSize = 0.025
-        request.quadratureTolerance = 22
-        request.regionOfInterest = CGRect(x: 0.02, y: 0.24, width: 0.96, height: 0.74)
+        request.maximumObservations = 18
+        request.minimumAspectRatio = 0.55
+        request.maximumAspectRatio = 3.2
+        request.minimumSize = 0.012
+        request.quadratureTolerance = 28
+        request.regionOfInterest = CGRect(x: 0.01, y: 0.20, width: 0.98, height: 0.79)
 
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
         try handler.perform([request])
@@ -80,26 +132,26 @@ final class TrafficSignDetector {
         var best: TrafficSignObservation?
 
         for rect in rectangles {
-            let box = rect.boundingBox
-            guard box.width > 0.025,
-                  box.height > 0.02,
-                  box.width < 0.36,
-                  box.height < 0.30 else { continue }
+            let box = fullImageRect(rect.boundingBox, in: request.regionOfInterest)
+            guard box.width > 0.012,
+                  box.height > 0.012,
+                  box.width < 0.42,
+                  box.height < 0.34 else { continue }
 
-            let expanded = box.insetBy(dx: -box.width * 0.06, dy: -box.height * 0.06)
+            let expanded = box.insetBy(dx: -box.width * 0.08, dy: -box.height * 0.08)
                 .intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
             guard let a = appearance(in: expanded, pixelBuffer: pixelBuffer) else { continue }
 
-            guard a.brightRatio >= 0.38,
-                  a.darkRatio >= 0.055,
-                  a.darkRatio <= 0.48 else { continue }
+            guard a.brightRatio >= 0.22,
+                  a.darkRatio >= 0.025,
+                  a.darkRatio <= 0.58 else { continue }
 
-            let hasRedSlash = a.redRatio >= 0.017
+            let hasRedSlash = a.redRatio >= 0.010
             let kind: TrafficSignKind = hasRedSlash ? .denseAreaEnd : .denseAreaStart
-            let structureScore = min(0.20, a.brightRatio * 0.12 + a.darkRatio * 0.42)
-            let slashBonus = hasRedSlash ? min(0.09, a.redRatio * 1.6) : 0.0
-            let confidence = min(0.92, rect.confidence + Float(structureScore + slashBonus))
-            guard confidence >= 0.70 else { continue }
+            let structureScore = min(0.24, a.brightRatio * 0.15 + a.darkRatio * 0.46)
+            let slashBonus = hasRedSlash ? min(0.10, a.redRatio * 1.9) : 0.0
+            let confidence = min(0.94, rect.confidence + Float(structureScore + slashBonus))
+            guard confidence >= 0.52 else { continue }
 
             let observation = TrafficSignObservation(kind: kind, confidence: confidence, timestamp: timestamp)
             if best?.confidence ?? 0 < confidence { best = observation }
@@ -109,8 +161,8 @@ final class TrafficSignDetector {
     }
 
     private func expandedSignRect(around textBox: CGRect) -> CGRect {
-        let w = max(textBox.width * 2.5, textBox.height * 2.0)
-        let h = max(textBox.height * 3.2, textBox.width * 1.4)
+        let w = max(textBox.width * 3.2, textBox.height * 2.8)
+        let h = max(textBox.height * 4.0, textBox.width * 1.8)
         return CGRect(
             x: textBox.midX - w / 2,
             y: textBox.midY - h / 2,
@@ -138,8 +190,8 @@ final class TrafficSignDetector {
         ).intersection(extent)
         guard !rect.isEmpty else { return nil }
 
-        let targetWidth = 48
-        let targetHeight = 48
+        let targetWidth = 64
+        let targetHeight = 64
         let sx = CGFloat(targetWidth) / rect.width
         let sy = CGFloat(targetHeight) / rect.height
         let cropped = image.cropped(to: rect)
@@ -172,9 +224,9 @@ final class TrafficSignDetector {
             let maxRGB = max(r, max(g, b))
             let minRGB = min(r, min(g, b))
 
-            if r > 120, r > g + 35, r > b + 30 { red += 1 }
-            if minRGB > 155 { bright += 1 }
-            if maxRGB < 85 { dark += 1 }
+            if r > 105, r > g + 22, r > b + 20 { red += 1 }
+            if minRGB > 135 { bright += 1 }
+            if maxRGB < 100 { dark += 1 }
         }
 
         return Appearance(
