@@ -32,7 +32,7 @@ targets:
         SeventyMaiToken: "__SEVENTYMAI_TOKEN__"
         NSCameraUsageDescription: "xADAS uses the rear camera for real-time driver-assistance vision processing."
         NSLocalNetworkUsageDescription: "xADAS connects directly to your 70mai dashcam on its local Wi-Fi network to receive the RTSP video stream."
-        NSLocationWhenInUseUsageDescription: "xADAS uses GPS speed only to enable experimental audible and vibration warnings above 60 km/h."
+        NSLocationWhenInUseUsageDescription: "xADAS uses GPS speed for speed-limit and experimental ADAS warnings while driving."
         UIRequiresFullScreen: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationLandscapeLeft
@@ -40,8 +40,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.hmtnvac.xadas
-        MARKETING_VERSION: 0.9.8
-        CURRENT_PROJECT_VERSION: 98
+        MARKETING_VERSION: 0.9.9
+        CURRENT_PROJECT_VERSION: 99
         TARGETED_DEVICE_FAMILY: "1"
         INFOPLIST_FILE: xADAS-iOS/Info.plist
         GENERATE_INFOPLIST_FILE: NO
