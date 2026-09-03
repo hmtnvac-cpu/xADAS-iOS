@@ -21,8 +21,6 @@ enum LaneAIDetectorError: LocalizedError {
     }
 }
 
-/// Real lane recognition using Ultra-Fast-Lane-Detection V2 (TuSimple, ResNet-18).
-/// The bundled ONNX model is weight-quantized and runs fully on device.
 final class LaneAIDetector {
     private static let inputWidth = 800
     private static let resizedHeight = 400
@@ -31,15 +29,19 @@ final class LaneAIDetector {
     private static let rowCount = 56
     private static let laneCount = 4
 
+    private struct DecodedLane {
+        let index: Int
+        let points: [CGPoint]
+        let confidence: Double
+        let xAtEvaluation: Double
+    }
+
     private let environment: ORTEnv
     private let session: ORTSession
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
 
     init() throws {
-        guard let modelURL = Bundle.main.url(
-            forResource: "UFLDv2TuSimpleRes18Int8",
-            withExtension: "onnx"
-        ) else {
+        guard let modelURL = Bundle.main.url(forResource: "UFLDv2TuSimpleRes18Int8", withExtension: "onnx") else {
             throw LaneAIDetectorError.modelMissing
         }
 
@@ -47,16 +49,7 @@ final class LaneAIDetector {
         let options = try ORTSessionOptions()
         try options.setIntraOpNumThreads(2)
         try options.setGraphOptimizationLevel(.all)
-
-        // Keep this quantized UFLD graph on ONNX Runtime CPU.  Splitting it
-        // between Core ML and CPU can fail session creation on older/jailbroken
-        // devices even though the same model runs correctly on ORT CPU.
-
-        session = try ORTSession(
-            env: environment,
-            modelPath: modelURL.path,
-            sessionOptions: options
-        )
+        session = try ORTSession(env: environment, modelPath: modelURL.path, sessionOptions: options)
     }
 
     func detect(pixelBuffer: CVPixelBuffer) throws -> LaneDetection? {
@@ -65,12 +58,7 @@ final class LaneAIDetector {
         let inputValue = try ORTValue(
             tensorData: NSMutableData(data: inputData),
             elementType: .float,
-            shape: [
-                NSNumber(value: 1),
-                NSNumber(value: 3),
-                NSNumber(value: Self.inputHeight),
-                NSNumber(value: Self.inputWidth)
-            ]
+            shape: [NSNumber(value: 1), NSNumber(value: 3), NSNumber(value: Self.inputHeight), NSNumber(value: Self.inputWidth)]
         )
 
         let outputs = try session.run(
@@ -79,43 +67,66 @@ final class LaneAIDetector {
             runOptions: nil
         )
 
-        guard let locValue = outputs["loc_row"],
-              let existValue = outputs["exist_row"] else {
+        guard let locValue = outputs["loc_row"], let existValue = outputs["exist_row"] else {
             throw LaneAIDetectorError.invalidOutput("lane")
         }
 
         let locRow: [Float32] = try floatArray(from: locValue, name: "loc_row")
         let existRow: [Float32] = try floatArray(from: existValue, name: "exist_row")
-
         guard locRow.count == Self.gridCount * Self.rowCount * Self.laneCount,
               existRow.count == 2 * Self.rowCount * Self.laneCount else {
             throw LaneAIDetectorError.invalidOutput("shape")
         }
 
-        guard let left = decodeLane(index: 1, locRow: locRow, existRow: existRow),
-              let right = decodeLane(index: 2, locRow: locRow, existRow: existRow),
-              left.points.count >= 14,
-              right.points.count >= 14 else {
-            return nil
-        }
-
         let evaluationY = 0.86
-        guard let leftX = fittedX(points: left.points, at: evaluationY),
-              let rightX = fittedX(points: right.points, at: evaluationY) else {
-            return nil
+        let savedCenter = UserDefaults.standard.double(forKey: DistanceEstimator.cameraCenterXKey)
+        let cameraCenter = savedCenter > 0.1 ? savedCenter : 0.5
+
+        var lanes: [DecodedLane] = []
+        for index in 0..<Self.laneCount {
+            guard let lane = decodeLane(index: index, locRow: locRow, existRow: existRow),
+                  lane.points.count >= 12,
+                  lane.confidence >= 0.30,
+                  let x = fittedX(points: lane.points, at: evaluationY),
+                  x.isFinite else { continue }
+            lanes.append(DecodedLane(index: index, points: lane.points, confidence: lane.confidence, xAtEvaluation: x))
         }
 
-        let laneWidth = rightX - leftX
-        guard laneWidth >= 0.18, laneWidth <= 0.78 else { return nil }
+        lanes.sort { $0.xAtEvaluation < $1.xAtEvaluation }
+        guard lanes.count >= 2 else { return nil }
 
+        // Pick the lane pair that actually brackets the calibrated camera/vehicle center.
+        // This is safer than hard-coding UFLD lane indices 1+2 when an adjacent lane
+        // becomes stronger than one of the ego-lane markings.
+        var bestPair: (DecodedLane, DecodedLane, Double)?
+        for leftIndex in 0..<(lanes.count - 1) {
+            for rightIndex in (leftIndex + 1)..<lanes.count {
+                let left = lanes[leftIndex]
+                let right = lanes[rightIndex]
+                let width = right.xAtEvaluation - left.xAtEvaluation
+                guard width >= 0.18, width <= 0.72,
+                      left.xAtEvaluation < cameraCenter,
+                      right.xAtEvaluation > cameraCenter else { continue }
+
+                let laneCenter = (left.xAtEvaluation + right.xAtEvaluation) / 2
+                let centerPenalty = abs(laneCenter - cameraCenter)
+                let widthPenalty = abs(width - 0.42) * 0.35
+                let confidenceReward = min(left.confidence, right.confidence) * 0.65
+                let score = confidenceReward - centerPenalty - widthPenalty
+                if bestPair == nil || score > bestPair!.2 {
+                    bestPair = (left, right, score)
+                }
+            }
+        }
+
+        guard let pair = bestPair else { return nil }
+        let left = pair.0
+        let right = pair.1
+        let laneWidth = right.xAtEvaluation - left.xAtEvaluation
         let confidence = min(left.confidence, right.confidence)
-        guard confidence >= 0.38 else { return nil }
+        guard confidence >= 0.34 else { return nil }
 
-        let laneCenter = (leftX + rightX) / 2
-        let savedCenter = UserDefaults.standard.double(
-            forKey: DistanceEstimator.cameraCenterXKey
-        )
-        let cameraCenter = savedCenter > 0.1 ? savedCenter : 0.5
+        let laneCenter = (left.xAtEvaluation + right.xAtEvaluation) / 2
         let normalizedOffset = (cameraCenter - laneCenter) / (laneWidth / 2)
 
         return LaneDetection(
@@ -129,9 +140,7 @@ final class LaneAIDetector {
     private func makeInput(pixelBuffer: CVPixelBuffer) throws -> [Float32] {
         let sourceWidth = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
         let sourceHeight = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
-        guard sourceWidth > 0, sourceHeight > 0 else {
-            throw LaneAIDetectorError.invalidFrame
-        }
+        guard sourceWidth > 0, sourceHeight > 0 else { throw LaneAIDetectorError.invalidFrame }
 
         var prepared: CVPixelBuffer?
         let attributes: [CFString: Any] = [
@@ -146,22 +155,14 @@ final class LaneAIDetector {
             attributes as CFDictionary,
             &prepared
         )
-        guard result == kCVReturnSuccess, let prepared else {
-            throw LaneAIDetectorError.invalidFrame
-        }
+        guard result == kCVReturnSuccess, let prepared else { throw LaneAIDetectorError.invalidFrame }
 
         let source = CIImage(cvPixelBuffer: pixelBuffer)
         let resized = source.transformed(by: CGAffineTransform(
             scaleX: CGFloat(Self.inputWidth) / sourceWidth,
             y: CGFloat(Self.resizedHeight) / sourceHeight
         ))
-        // UFLD TuSimple preprocessing removes the top 20% after resizing.
-        let roadCrop = resized.cropped(to: CGRect(
-            x: 0,
-            y: 0,
-            width: Self.inputWidth,
-            height: Self.inputHeight
-        ))
+        let roadCrop = resized.cropped(to: CGRect(x: 0, y: 0, width: Self.inputWidth, height: Self.inputHeight))
         ciContext.render(
             roadCrop,
             to: prepared,
@@ -171,9 +172,7 @@ final class LaneAIDetector {
 
         CVPixelBufferLockBaseAddress(prepared, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(prepared, .readOnly) }
-        guard let base = CVPixelBufferGetBaseAddress(prepared) else {
-            throw LaneAIDetectorError.invalidFrame
-        }
+        guard let base = CVPixelBufferGetBaseAddress(prepared) else { throw LaneAIDetectorError.invalidFrame }
 
         let pixelCount = Self.inputWidth * Self.inputHeight
         let rowBytes = CVPixelBufferGetBytesPerRow(prepared)
@@ -209,10 +208,6 @@ final class LaneAIDetector {
         for row in 0..<Self.rowCount {
             let absent = existRow[existIndex(classIndex: 0, row: row, lane: lane)]
             let present = existRow[existIndex(classIndex: 1, row: row, lane: lane)]
-            // Match UFLD V2's reference decoder: class 1 wins when the
-            // model says that this row anchor contains a lane point.  A
-            // second arbitrary probability threshold was discarding valid
-            // points on real 70mai frames.
             guard present > absent else { continue }
             let existence = softmaxSecond(absent, present)
 
@@ -286,8 +281,6 @@ final class LaneAIDetector {
         guard data.count % MemoryLayout<Float32>.stride == 0 else {
             throw LaneAIDetectorError.invalidOutput(name)
         }
-        return data.withUnsafeBytes { bytes in
-            Array(bytes.bindMemory(to: Float32.self))
-        }
+        return data.withUnsafeBytes { Array($0.bindMemory(to: Float32.self)) }
     }
 }
