@@ -47,6 +47,7 @@ struct DriveView: View {
 
             ADASOverlayView(
                 isCameraRunning: activeProcessor.frameWidth > 0 && activeProcessor.frameHeight > 0,
+                cameraName: selectedSource == .iPhone ? "iPhone" : "70mai",
                 fps: selectedSource == .iPhone ? cameraManager.fps : (frameProcessor.frameWidth > 0 ? 4.5 : 0),
                 pipelineStatus: selectedSource == .iPhone ? "IPHONE CAMERA ACTIVE" : rtspStatus,
                 detectorStatus: activeProcessor.detectorStatus,
