@@ -10,8 +10,8 @@ enum DenseAreaState: String, Equatable {
 
 enum TrafficSignKind: Hashable {
     case speedLimit(Int)
-    case denseAreaStart   // R.420
-    case denseAreaEnd     // R.421
+    case denseAreaStart
+    case denseAreaEnd
 }
 
 struct TrafficSignObservation: Equatable {
@@ -53,13 +53,13 @@ final class TrafficSignStateTracker {
 
     private var candidates: [TrafficSignKind: Candidate] = [:]
 
-    // 70mai snapshots are intermittent; do not require adjacent detections.
-    // Accumulate evidence for the same semantic sign over a short window.
-    private let minimumObservationConfidence: Float = 0.28
-    private let confirmationWindow: TimeInterval = 3.0
-    private let speedLockScore: Float = 1.05
-    private let areaLockScore: Float = 1.15
-    private let strongSingleHit: Float = 0.88
+    // Tuned for live driving: require repeat evidence, but keep the window short
+    // enough that a roadside sign can lock before the car passes it.
+    private let minimumObservationConfidence: Float = 0.32
+    private let confirmationWindow: TimeInterval = 1.25
+    private let speedLockScore: Float = 0.86
+    private let areaLockScore: Float = 0.92
+    private let strongSingleHit: Float = 0.95
 
     func ingest(_ observation: TrafficSignObservation) -> TrafficSignState {
         guard observation.confidence >= minimumObservationConfidence else { return state }
@@ -98,15 +98,15 @@ final class TrafficSignStateTracker {
         case .denseAreaStart, .denseAreaEnd: threshold = areaLockScore
         }
 
-        // A very strong detector result can lock immediately. Otherwise require
-        // at least two observations whose confidence accumulates past threshold.
+        // One exceptionally strong result may lock immediately. Normal detections
+        // need two consistent observations; this prevents 60/80 flicker.
         let confirmed = observation.confidence >= strongSingleHit
             || (candidate.hits >= 2 && candidate.score >= threshold)
         guard confirmed else { return state }
 
         switch observation.kind {
         case .speedLimit(let value):
-            guard (20...120).contains(value), value % 10 == 0 else { return state }
+            guard (10...120).contains(value), value % 10 == 0 else { return state }
             state.explicitSpeedLimitKPH = value
         case .denseAreaStart:
             state.denseArea = .inside
@@ -118,8 +118,6 @@ final class TrafficSignStateTracker {
         state.confidence = candidate.bestConfidence
         state.updatedAt = observation.timestamp
 
-        // A confirmed speed supersedes competing speed candidates; likewise for
-        // area signs. This prevents stale candidates from immediately flipping HUD.
         switch observation.kind {
         case .speedLimit:
             candidates = candidates.filter {
