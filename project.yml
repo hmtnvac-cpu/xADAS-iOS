@@ -32,6 +32,7 @@ targets:
         SeventyMaiToken: "__SEVENTYMAI_TOKEN__"
         NSCameraUsageDescription: "xADAS uses the rear camera for real-time driver-assistance vision processing."
         NSLocalNetworkUsageDescription: "xADAS connects directly to your 70mai dashcam on its local Wi-Fi network to receive the RTSP video stream."
+        NSLocationWhenInUseUsageDescription: "xADAS uses GPS speed only to enable experimental audible and vibration warnings above 60 km/h."
         UIRequiresFullScreen: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationLandscapeLeft
