@@ -32,7 +32,7 @@ final class FrameProcessor: ObservableObject {
     private var signFrameCounter = 0
     private let inferenceStride = 2
     private let laneStride = 2
-    private let signStride = 4
+    private let signStride = 2
     private var lastVehicleSeenAt: TimeInterval = 0
     private var lastLaneSeenAt: TimeInterval = 0
     private let detector: VehicleDetector?
