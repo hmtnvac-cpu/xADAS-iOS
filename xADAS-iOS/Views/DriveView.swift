@@ -45,12 +45,17 @@ struct DriveView: View {
                     cameraName: selectedSource == .iPhone ? "iPhone" : "70mai",
                     fps: selectedSource == .iPhone ? cameraManager.fps : (frameProcessor.frameWidth > 0 ? 4.5 : 0),
                     pipelineStatus: selectedSource == .iPhone ? "IPHONE CAMERA ACTIVE" : rtspStatus,
-                    detectorStatus: activeProcessor.detectorStatus, inferenceMS: activeProcessor.inferenceMS,
-                    frameWidth: activeProcessor.frameWidth, frameHeight: activeProcessor.frameHeight,
-                    detections: activeProcessor.detections, leadDistanceState: activeProcessor.leadDistanceState,
+                    detectorStatus: activeProcessor.detectorStatus,
+                    inferenceMS: activeProcessor.inferenceMS,
+                    frameWidth: activeProcessor.frameWidth,
+                    frameHeight: activeProcessor.frameHeight,
+                    detections: activeProcessor.detections,
+                    leadDistanceState: activeProcessor.leadDistanceState,
                     horizonRatio: UserDefaults.standard.double(forKey: DistanceEstimator.horizonRatioKey),
-                    laneDetection: activeProcessor.laneDetection, laneStatus: activeProcessor.laneStatus,
-                    laneDepartureState: activeProcessor.laneDepartureState, trafficSignState: activeProcessor.trafficSignState,
+                    laneDetection: activeProcessor.laneDetection,
+                    laneStatus: activeProcessor.laneStatus,
+                    laneDepartureState: activeProcessor.laneDepartureState,
+                    trafficSignState: activeProcessor.trafficSignState,
                     trafficSignStatus: activeProcessor.trafficSignStatus,
                     mapSpeedLimitKPH: mapSpeedLimitProvider.speedLimitKPH,
                     cameraSpeedLimitKPH: nil,
@@ -99,6 +104,8 @@ struct DriveView: View {
         .onAppear {
             visionSuspended = false
             vehicleSpeedMonitor.start()
+            frameProcessor.vehicleSpeedKPH = vehicleSpeedMonitor.speedKPH
+            cameraManager.frameProcessor.vehicleSpeedKPH = vehicleSpeedMonitor.speedKPH
             if !didInitialConfigure {
                 didInitialConfigure = true
                 configureSelectedSource(force: true)
@@ -146,7 +153,9 @@ struct DriveView: View {
             guard !visionSuspended else { return }
             updateWarnings(distance: activeProcessor.leadDistanceState, lane: value)
         }
-        .onChange(of: vehicleSpeedMonitor.speedKPH) { _ in
+        .onChange(of: vehicleSpeedMonitor.speedKPH) { speed in
+            frameProcessor.vehicleSpeedKPH = speed
+            cameraManager.frameProcessor.vehicleSpeedKPH = speed
             guard !visionSuspended else { return }
             updateWarnings(distance: activeProcessor.leadDistanceState, lane: activeProcessor.laneDepartureState)
         }
@@ -156,16 +165,10 @@ struct DriveView: View {
     private var navigationButton: some View {
         Menu {
             if navigationProvider.isNavigating {
-                Button("Điểm đến mới", systemImage: "magnifyingglass") {
-                    showNavigationSearch = true
-                }
-                Button("Dừng dẫn đường", systemImage: "xmark.circle") {
-                    navigationProvider.stopNavigation()
-                }
+                Button("Điểm đến mới", systemImage: "magnifyingglass") { showNavigationSearch = true }
+                Button("Dừng dẫn đường", systemImage: "xmark.circle") { navigationProvider.stopNavigation() }
             } else {
-                Button("Chọn điểm đến", systemImage: "location.magnifyingglass") {
-                    showNavigationSearch = true
-                }
+                Button("Chọn điểm đến", systemImage: "location.magnifyingglass") { showNavigationSearch = true }
             }
         } label: {
             Image(systemName: navigationProvider.isNavigating ? "location.fill" : "location")
