@@ -21,7 +21,7 @@ final class FrameProcessor: ObservableObject {
     @Published private(set) var laneDepartureState: LaneDepartureState = .unavailable
     @Published private(set) var laneStatus = "LANE MODEL LOADING"
     @Published private(set) var trafficSignState = TrafficSignState()
-    @Published private(set) var trafficSignStatus = "SIGN AI READY"
+    @Published private(set) var trafficSignStatus = "SIGN AI PAUSED • PERFORMANCE MODE"
 
     var horizontalFieldOfViewDegrees: Double = 0
     var effectiveFocalPixelsAt1920: Double?
@@ -30,13 +30,13 @@ final class FrameProcessor: ObservableObject {
     private var lastPublishedAt = ProcessInfo.processInfo.systemUptime
     private var inferenceFrameCounter = 0
     private var laneFrameCounter = 1
-    private var signFrameCounter = 0
-    // 70mai native path intentionally drops frames upstream while AI is busy,
-    // so running vehicle inference on every accepted frame minimizes detection
-    // latency without allowing a backlog to accumulate.
+
+    // Performance mode: vehicle/distance gets every accepted AI frame; lane runs
+    // every second accepted frame. Traffic-sign inference is intentionally paused
+    // so CPU/GPU/ANE time is concentrated on lead range and LDW.
     private let inferenceStride = 1
     private let laneStride = 2
-    private let signStride = 2
+
     private var lastVehicleSeenAt: TimeInterval = 0
     private var lastLaneSeenAt: TimeInterval = 0
     private let detector: VehicleDetector?
@@ -44,8 +44,6 @@ final class FrameProcessor: ObservableObject {
     private let leadDistanceTracker = LeadDistanceTracker()
     private let laneDetector: LaneAIDetector?
     private let laneDepartureMonitor = LaneDepartureMonitor()
-    private let trafficSignDetector = HybridTrafficSignDetector()
-    private let trafficSignTracker = TrafficSignStateTracker()
     private var latestLaneDetection: LaneDetection?
 
     init() {
@@ -64,8 +62,6 @@ final class FrameProcessor: ObservableObject {
             laneDetector = nil
             laneStatus = error.localizedDescription
         }
-
-        trafficSignStatus = trafficSignDetector.modeLabel
     }
 
     func process(sampleBuffer: CMSampleBuffer) {
@@ -79,7 +75,6 @@ final class FrameProcessor: ObservableObject {
         totalFrames &+= 1
         inferenceFrameCounter &+= 1
         laneFrameCounter &+= 1
-        signFrameCounter &+= 1
 
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
@@ -90,8 +85,6 @@ final class FrameProcessor: ObservableObject {
         var newLaneDetection: LaneDetection?
         var laneWasEvaluated = false
         var newLaneState: LaneDepartureState?
-        var newTrafficSignState: TrafficSignState?
-        var newTrafficSignStatus: String?
 
         if inferenceFrameCounter >= inferenceStride, let detector {
             inferenceFrameCounter = 0
@@ -134,33 +127,6 @@ final class FrameProcessor: ObservableObject {
             }
         }
 
-        if signFrameCounter >= signStride {
-            signFrameCounter = 0
-            do {
-                let observations = try trafficSignDetector.detect(pixelBuffer: pixelBuffer, timestamp: timestamp)
-                var state = trafficSignTracker.state
-                for observation in observations {
-                    state = trafficSignTracker.ingest(observation)
-                }
-                newTrafficSignState = state
-
-                if observations.isEmpty {
-                    newTrafficSignStatus = "\(trafficSignDetector.modeLabel) • SEARCH"
-                } else {
-                    let summary = observations.map { observation -> String in
-                        switch observation.kind {
-                        case .speedLimit(let value): return "LIMIT \(value)"
-                        case .denseAreaStart: return "R420"
-                        case .denseAreaEnd: return "R421"
-                        }
-                    }.joined(separator: " + ")
-                    newTrafficSignStatus = "\(trafficSignDetector.modeLabel) • \(summary)"
-                }
-            } catch {
-                newTrafficSignStatus = "SIGN AI ERROR: \(error.localizedDescription)"
-            }
-        }
-
         if var measured = newDetections {
             if let lane = latestLaneDetection,
                let leadIndex = leadVehicleIndex(in: measured, lane: lane) {
@@ -195,7 +161,7 @@ final class FrameProcessor: ObservableObject {
 
         let now = ProcessInfo.processInfo.systemUptime
         let shouldPublishMetrics = now - lastPublishedAt >= 0.25
-        guard shouldPublishMetrics || newDetections != nil || laneWasEvaluated || newTrafficSignState != nil else { return }
+        guard shouldPublishMetrics || newDetections != nil || laneWasEvaluated else { return }
 
         if shouldPublishMetrics { lastPublishedAt = now }
         let count = totalFrames
@@ -207,7 +173,7 @@ final class FrameProcessor: ObservableObject {
                 self.frameWidth = width
                 self.frameHeight = height
                 self.processedFrames = count
-                self.pipelineStatus = "FRAME PIPELINE ACTIVE"
+                self.pipelineStatus = "FRAME PIPELINE ACTIVE • PERF MODE"
             }
 
             if let newDetections {
@@ -236,9 +202,6 @@ final class FrameProcessor: ObservableObject {
                     self.laneStatus = "LANE SEARCHING"
                 }
             }
-
-            if let newTrafficSignState { self.trafficSignState = newTrafficSignState }
-            if let newTrafficSignStatus { self.trafficSignStatus = newTrafficSignStatus }
         }
     }
 
