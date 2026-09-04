@@ -9,8 +9,6 @@ on:
       - "project.yml"
       - "scripts/download-model.sh"
       - "scripts/download-lane-model.sh"
-      - "scripts/download-vtsr-model.sh"
-      - "scripts/download-vn82-model.sh"
       - "scripts/extract-ufldv2-model.py"
       - "scripts/quantize-ufldv2-model.py"
       - ".github/workflows/build-ios.yml"
@@ -31,7 +29,7 @@ jobs:
           python-version: "3.12"
       - name: Install XcodeGen
         run: brew install xcodegen
-      - name: Download Core ML model
+      - name: Download vehicle Core ML model
         run: bash scripts/download-model.sh
       - name: Cache UFLD V2 lane model
         uses: actions/cache@v4
@@ -42,33 +40,6 @@ jobs:
         run: |
           python3 -m pip install --disable-pip-version-check onnx==1.17.0 onnxruntime==1.20.1
           bash scripts/download-lane-model.sh
-      - name: Cache Vietnam traffic sign models
-        uses: actions/cache@v4
-        with:
-          path: |
-            xADAS-iOS/Models/VTSRInt8.onnx
-            xADAS-iOS/Models/VTSRLabelMapping.json
-            xADAS-iOS/Models/VNTrafficSign82.onnx
-          key: vietnam-sign-models-v2-vn82
-      - name: Prepare Vietnam traffic sign models
-        run: |
-          bash scripts/download-vtsr-model.sh
-          bash scripts/download-vn82-model.sh
-      - name: Verify VN82 ONNX contract
-        run: |
-          python3 - <<'PY'
-          import onnx
-          model = onnx.load("xADAS-iOS/Models/VNTrafficSign82.onnx")
-          graph = model.graph
-          assert graph.input and graph.output
-          inp, out = graph.input[0], graph.output[0]
-          in_shape = [d.dim_value if d.dim_value else d.dim_param for d in inp.type.tensor_type.shape.dim]
-          out_shape = [d.dim_value if d.dim_value else d.dim_param for d in out.type.tensor_type.shape.dim]
-          assert inp.name == "images"
-          assert out.name == "output0"
-          assert in_shape[-2:] == [640, 640]
-          assert 86 in out_shape
-          PY
       - name: Generate Xcode project
         run: xcodegen generate
       - name: Inject 70mai preview token
@@ -80,16 +51,6 @@ jobs:
             /usr/libexec/PlistBuddy -c "Set :SeventyMaiToken $SEVENTYMAI_TOKEN" xADAS-iOS/Info.plist
           else
             echo "70mai token secret is not configured; RTSP fallback remains available."
-          fi
-      - name: Inject Mapbox access token
-        env:
-          MAPBOX_TOKEN: ${{ secrets.MAPBOX_ACCESS_TOKEN || secrets.MAPBOX_TOKEN || secrets.PUBLIC_MAPBOX_TOKEN || secrets.MAPBOX_PUBLIC_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -n "${MAPBOX_TOKEN:-}" ]; then
-            /usr/libexec/PlistBuddy -c "Set :MapboxAccessToken $MAPBOX_TOKEN" xADAS-iOS/Info.plist
-          else
-            echo "Mapbox token secret was not found under the supported names."
           fi
       - name: Verify deployment target before build
         run: |
@@ -112,9 +73,6 @@ jobs:
           test -f "$BIN"
           test -d "$APP_PATH/YOLOv3TinyInt8LUT.mlmodelc"
           test -f "$APP_PATH/UFLDv2TuSimpleRes18Int8.onnx"
-          test -f "$APP_PATH/VTSRInt8.onnx"
-          test -f "$APP_PATH/VTSRLabelMapping.json"
-          test -f "$APP_PATH/VNTrafficSign82.onnx"
           test "$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$INFO")" = "16.0"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$INFO")" = "Ivy"
           xcrun vtool -show-build "$BIN"
