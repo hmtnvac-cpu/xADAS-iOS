@@ -2,18 +2,22 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleShortVersionString</key>
-	<string>$(MARKETING_VERSION)</string>
-	<key>CFBundleVersion</key>
-	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<key>SeventyMaiToken</key>
-	<string>__SEVENTYMAI_TOKEN__</string>
+    <key>CFBundleDisplayName</key>
+    <string>Ivy</string>
+    <key>CFBundleName</key>
+    <string>Ivy</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$(MARKETING_VERSION)</string>
+    <key>CFBundleVersion</key>
+    <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>SeventyMaiToken</key>
+    <string>__SEVENTYMAI_TOKEN__</string>
     <key>NSCameraUsageDescription</key>
-    <string>xADAS uses the rear camera for real-time driver-assistance vision processing.</string>
+    <string>Ivy uses the rear camera for real-time driver-assistance vision processing.</string>
     <key>NSLocalNetworkUsageDescription</key>
-    <string>xADAS connects directly to your 70mai dashcam on its local Wi-Fi network to receive the RTSP video stream.</string>
+    <string>Ivy connects directly to your 70mai dashcam on its local Wi-Fi network to receive the RTSP video stream.</string>
     <key>NSLocationWhenInUseUsageDescription</key>
-    <string>xADAS uses GPS speed only to enable experimental audible and vibration warnings above 60 km/h.</string>
+    <string>Ivy uses GPS for vehicle speed and driver-assistance logic.</string>
     <key>UISupportedInterfaceOrientations</key>
     <array>
         <string>UIInterfaceOrientationLandscapeLeft</string>
