@@ -52,6 +52,17 @@ jobs:
           else
             echo "70mai token secret is not configured; RTSP fallback remains available."
           fi
+      - name: Inject Mapbox access token
+        env:
+          MAPBOX_TOKEN: ${{ secrets.MAPBOX_ACCESS_TOKEN || secrets.MAPBOX_TOKEN || secrets.PUBLIC_MAPBOX_TOKEN || secrets.MAPBOX_PUBLIC_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "${MAPBOX_TOKEN:-}" ]; then
+            /usr/libexec/PlistBuddy -c "Set :MapboxAccessToken $MAPBOX_TOKEN" xADAS-iOS/Info.plist
+            echo "Mapbox public token injected."
+          else
+            echo "Mapbox token secret is not configured. Navigation search/speed-limit will show unavailable."
+          fi
       - name: Verify deployment target before build
         run: |
           set -euo pipefail
