@@ -16,6 +16,7 @@ struct DriveView: View {
     @StateObject private var cameraManager = CameraManager()
     @StateObject private var warningManager = ADASWarningManager()
     @StateObject private var vehicleSpeedMonitor = VehicleSpeedMonitor()
+    @StateObject private var mapSpeedLimitProvider = MapSpeedLimitProvider()
 
     private let seventyMaiURL = CameraSource.seventyMaiURL
     private var selectedSource: CameraSourceChoice { CameraSourceChoice(rawValue: cameraSourceRaw) ?? .seventyMai }
@@ -48,8 +49,11 @@ struct DriveView: View {
                     horizonRatio: UserDefaults.standard.double(forKey: DistanceEstimator.horizonRatioKey),
                     laneDetection: activeProcessor.laneDetection, laneStatus: activeProcessor.laneStatus,
                     laneDepartureState: activeProcessor.laneDepartureState, trafficSignState: activeProcessor.trafficSignState,
-                    trafficSignStatus: activeProcessor.trafficSignStatus, mapSpeedLimitKPH: nil, cameraSpeedLimitKPH: nil,
-                    mapStatus: "SIGN/MAP PAUSED", vehicleSpeedKPH: vehicleSpeedMonitor.speedKPH
+                    trafficSignStatus: activeProcessor.trafficSignStatus,
+                    mapSpeedLimitKPH: mapSpeedLimitProvider.speedLimitKPH,
+                    cameraSpeedLimitKPH: nil,
+                    mapStatus: mapSpeedLimitProvider.status,
+                    vehicleSpeedKPH: vehicleSpeedMonitor.speedKPH
                 )
             }
 
@@ -77,6 +81,10 @@ struct DriveView: View {
             updateWarnings(distance: activeProcessor.leadDistanceState, lane: activeProcessor.laneDepartureState)
         }
         .onChange(of: cameraSourceRaw) { _ in configureSelectedSource(force: true) }
+        .onChange(of: vehicleSpeedMonitor.latestLocation) { location in
+            guard !visionSuspended, let location else { return }
+            mapSpeedLimitProvider.ingest(location: location)
+        }
         .onChange(of: scenePhase) { phase in
             switch phase {
             case .active:
@@ -85,14 +93,11 @@ struct DriveView: View {
                 if configuredSourceRaw != cameraSourceRaw { configureSelectedSource(force: true) }
                 else if selectedSource == .iPhone && !cameraManager.isRunning { cameraManager.start() }
                 else if selectedSource == .seventyMai {
-                    // Recreate the player only after a genuine background suspension.
                     rtspStatus = "70MAI RESUMING"
                     restartToken = UUID()
                     scheduleNativeFallbackCheck(for: restartToken)
                 }
             case .background:
-                // Ivy is a foreground ADAS app. Do no camera/RTSP/AI work while hidden:
-                // this releases shared resources, reduces heat and avoids tweak conflicts.
                 visionSuspended = true
                 vehicleSpeedMonitor.stop()
                 cameraManager.stop()
@@ -100,8 +105,6 @@ struct DriveView: View {
                 rtspStatus = "IVY SUSPENDED"
                 restartToken = UUID()
             case .inactive:
-                // Control Center / transient interruptions must not repeatedly tear down
-                // the active pipeline; only true background performs the heavy cleanup.
                 break
             @unknown default:
                 break
