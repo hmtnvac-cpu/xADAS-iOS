@@ -30,12 +30,8 @@ struct ADASOverlayView: View {
                     HStack(alignment: .top) {
                         VStack(alignment: .leading, spacing: 4) {
                             HStack(spacing: 4) {
-                                Text("Ivy")
-                                    .font(.system(size: 24, weight: .black, design: .rounded))
-                                    .italic()
-                                Text("♥")
-                                    .font(.system(size: 20, weight: .black, design: .rounded))
-                                    .foregroundStyle(.pink)
+                                Text("Ivy").font(.system(size: 24, weight: .black, design: .rounded)).italic()
+                                Text("♥").font(.system(size: 20, weight: .black, design: .rounded)).foregroundStyle(.pink)
                             }
                             HStack(spacing: 5) {
                                 Circle().fill(isCameraRunning ? .green : .yellow).frame(width: 7, height: 7)
@@ -43,26 +39,21 @@ struct ADASOverlayView: View {
                             }
                         }
                         Spacer()
-                        VStack(alignment: .trailing, spacing: 5) {
-                            HStack(spacing: 5) {
-                                Circle().fill(laneIndicatorColor).frame(width: 7, height: 7)
-                                Text(laneIndicatorText).font(.caption2.monospaced().bold())
-                            }
+                        HStack(spacing: 5) {
+                            Circle().fill(laneIndicatorColor).frame(width: 7, height: 7)
+                            Text(laneIndicatorText).font(.caption2.monospaced().bold())
                         }
                     }
                     .padding(.horizontal, 20).padding(.top, 12)
                     Spacer()
                 }
 
-                // White = detected physical ego-lane boundaries.
                 if let laneDetection { laneOverlay(laneDetection, in: proxy.size) }
-                // Blue = fixed forward vehicle/distance corridor. It is deliberately
-                // separate from Lane AI and stays visually stable on screen.
                 distanceCorridor(in: proxy.size)
-
                 ForEach(detections) { detection in detectionBox(detection, in: proxy.size) }
 
                 gpsSpeedometer.position(x: 64, y: proxy.size.height - 72)
+                speedLimitBadge.position(x: 112, y: proxy.size.height - 111)
                 compactDistanceHUD.position(x: proxy.size.width - 62, y: proxy.size.height - 68)
 
                 if let warning = laneDepartureState.displayText {
@@ -88,6 +79,19 @@ struct ADASOverlayView: View {
                 Text("km/h").font(.system(size: 9, weight: .bold, design: .rounded)).foregroundStyle(.white.opacity(0.82))
             }
         }.frame(width: 72, height: 72)
+    }
+
+    private var speedLimitBadge: some View {
+        ZStack {
+            Circle().fill(.white)
+            Circle().stroke(.red, lineWidth: 3)
+            Text(mapSpeedLimitKPH.map(String.init) ?? "--")
+                .font(.system(size: 15, weight: .black, design: .rounded))
+                .foregroundStyle(.black)
+                .monospacedDigit()
+        }
+        .frame(width: 38, height: 38)
+        .opacity(mapSpeedLimitKPH == nil ? 0.72 : 1.0)
     }
 
     private var compactDistanceHUD: some View {
@@ -155,8 +159,6 @@ struct ADASOverlayView: View {
         Canvas { context, canvasSize in
             let left = smoothPath(stabilizedLanePoints(lane.leftPoints), in: canvasSize)
             let right = smoothPath(stabilizedLanePoints(lane.rightPoints), in: canvasSize)
-            // Physical lane markings are always thin white guides. Warning state is
-            // communicated separately, so the road image remains clean.
             context.stroke(left, with: .color(.white.opacity(0.92)), lineWidth: 1.35)
             context.stroke(right, with: .color(.white.opacity(0.92)), lineWidth: 1.35)
         }
