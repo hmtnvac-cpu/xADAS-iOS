@@ -9,6 +9,8 @@ struct DriveView: View {
     @State private var rtspStatus = "70MAI STARTING"
     @State private var restartToken = UUID()
     @State private var useVLCFallback = false
+    @State private var configuredSourceRaw: String?
+    @State private var didInitialConfigure = false
     @StateObject private var frameProcessor = FrameProcessor()
     @StateObject private var cameraManager = CameraManager()
     @StateObject private var warningManager = ADASWarningManager()
@@ -22,13 +24,9 @@ struct DriveView: View {
     var body: some View {
         ZStack {
             Group {
-                if selectedSource == .iPhone {
-                    CameraPreview(session: cameraManager.session)
-                } else if useVLCFallback {
-                    SeventyMaiPlayerView(urlString: seventyMaiURL, restartToken: restartToken, frameProcessor: frameProcessor, statusText: $rtspStatus)
-                } else {
-                    RootlessSeventyMaiPlayerView(urlString: seventyMaiURL, restartToken: restartToken, frameProcessor: frameProcessor, statusText: $rtspStatus)
-                }
+                if selectedSource == .iPhone { CameraPreview(session: cameraManager.session) }
+                else if useVLCFallback { SeventyMaiPlayerView(urlString: seventyMaiURL, restartToken: restartToken, frameProcessor: frameProcessor, statusText: $rtspStatus) }
+                else { RootlessSeventyMaiPlayerView(urlString: seventyMaiURL, restartToken: restartToken, frameProcessor: frameProcessor, statusText: $rtspStatus) }
             }.ignoresSafeArea()
 
             ADASOverlayView(
@@ -36,58 +34,49 @@ struct DriveView: View {
                 cameraName: selectedSource == .iPhone ? "iPhone" : "70mai",
                 fps: selectedSource == .iPhone ? cameraManager.fps : (frameProcessor.frameWidth > 0 ? 4.5 : 0),
                 pipelineStatus: selectedSource == .iPhone ? "IPHONE CAMERA ACTIVE" : rtspStatus,
-                detectorStatus: activeProcessor.detectorStatus,
-                inferenceMS: activeProcessor.inferenceMS,
-                frameWidth: activeProcessor.frameWidth,
-                frameHeight: activeProcessor.frameHeight,
-                detections: activeProcessor.detections,
-                leadDistanceState: activeProcessor.leadDistanceState,
+                detectorStatus: activeProcessor.detectorStatus, inferenceMS: activeProcessor.inferenceMS,
+                frameWidth: activeProcessor.frameWidth, frameHeight: activeProcessor.frameHeight,
+                detections: activeProcessor.detections, leadDistanceState: activeProcessor.leadDistanceState,
                 horizonRatio: UserDefaults.standard.double(forKey: DistanceEstimator.horizonRatioKey),
-                laneDetection: activeProcessor.laneDetection,
-                laneStatus: activeProcessor.laneStatus,
-                laneDepartureState: activeProcessor.laneDepartureState,
-                trafficSignState: activeProcessor.trafficSignState,
-                trafficSignStatus: activeProcessor.trafficSignStatus,
-                mapSpeedLimitKPH: nil,
-                cameraSpeedLimitKPH: nil,
-                mapStatus: "SIGN/MAP PAUSED",
-                vehicleSpeedKPH: vehicleSpeedMonitor.speedKPH
+                laneDetection: activeProcessor.laneDetection, laneStatus: activeProcessor.laneStatus,
+                laneDepartureState: activeProcessor.laneDepartureState, trafficSignState: activeProcessor.trafficSignState,
+                trafficSignStatus: activeProcessor.trafficSignStatus, mapSpeedLimitKPH: nil, cameraSpeedLimitKPH: nil,
+                mapStatus: "SIGN/MAP PAUSED", vehicleSpeedKPH: vehicleSpeedMonitor.speedKPH
             )
 
             if showCalibration { CameraAlignmentOverlay(isPresented: $showCalibration) }
-
             VStack {
-                HStack {
-                    Spacer()
-                    speakerMenu
-                        .padding(.top, 58)
-                        .padding(.trailing, 18)
-                }
+                HStack { Spacer(); speakerMenu.padding(.top, 58).padding(.trailing, 18) }
                 Spacer()
                 if selectedSource == .seventyMai, (frameProcessor.frameWidth == 0 || frameProcessor.frameHeight == 0) {
-                    Button("RETRY 70MAI") {
-                        rtspStatus = "70MAI RETRYING"; useVLCFallback = false; restartToken = UUID()
-                    }.buttonStyle(ADASButtonStyle()).padding(.bottom, 70)
+                    Button("RETRY 70MAI") { rtspStatus = "70MAI RETRYING"; useVLCFallback = false; restartToken = UUID(); scheduleNativeFallbackCheck(for: restartToken) }
+                        .buttonStyle(ADASButtonStyle()).padding(.bottom, 70)
                 }
             }.foregroundStyle(.white)
         }
         .overlay(alignment: .bottom) {
             if !showCalibration {
-                HStack(spacing: 16) {
-                    Button("CALIBRATE") { showCalibration = true }
-                    Button("SETTING") { showSettings = true }
-                }.buttonStyle(ADASButtonStyle()).padding(.bottom, 22)
+                HStack(spacing: 16) { Button("CALIBRATE") { showCalibration = true }; Button("SETTING") { showSettings = true } }
+                    .buttonStyle(ADASButtonStyle()).padding(.bottom, 22)
             }
         }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .onAppear {
-            vehicleSpeedMonitor.start(); configureSelectedSource()
+            vehicleSpeedMonitor.start()
+            if !didInitialConfigure { didInitialConfigure = true; configureSelectedSource(force: true) }
             updateWarnings(distance: activeProcessor.leadDistanceState, lane: activeProcessor.laneDepartureState)
         }
-        .onChange(of: cameraSourceRaw) { _ in configureSelectedSource() }
+        .onChange(of: cameraSourceRaw) { _ in configureSelectedSource(force: true) }
         .onChange(of: scenePhase) { phase in
-            if phase == .active { vehicleSpeedMonitor.start(); configureSelectedSource() }
-            else { vehicleSpeedMonitor.stop(); if selectedSource == .iPhone { cameraManager.stop() } }
+            if phase == .active {
+                vehicleSpeedMonitor.start()
+                // Returning from Settings/control center must not tear down/restart RTSP.
+                if configuredSourceRaw != cameraSourceRaw { configureSelectedSource(force: true) }
+                else if selectedSource == .iPhone && !cameraManager.isRunning { cameraManager.start() }
+            } else if phase == .background {
+                vehicleSpeedMonitor.stop()
+                if selectedSource == .iPhone { cameraManager.stop() }
+            }
         }
         .onChange(of: activeProcessor.leadDistanceState) { value in updateWarnings(distance: value, lane: activeProcessor.laneDepartureState) }
         .onChange(of: activeProcessor.laneDepartureState) { value in updateWarnings(distance: activeProcessor.leadDistanceState, lane: value) }
@@ -97,32 +86,12 @@ struct DriveView: View {
 
     private var speakerMenu: some View {
         Menu {
-            Button {
-                audioModeRaw = ADASAudioMode.beepOnly.rawValue
-            } label: {
-                if audioMode == .beepOnly {
-                    Label("Chỉ tiếng bip", systemImage: "checkmark")
-                } else {
-                    Text("Chỉ tiếng bip")
-                }
-            }
-
-            Button {
-                audioModeRaw = ADASAudioMode.allWarnings.rawValue
-            } label: {
-                if audioMode == .allWarnings {
-                    Label("Tất cả cảnh báo", systemImage: "checkmark")
-                } else {
-                    Text("Tất cả cảnh báo")
-                }
-            }
+            Button { audioModeRaw = ADASAudioMode.beepOnly.rawValue } label: { audioMode == .beepOnly ? Label("Chỉ tiếng bip", systemImage: "checkmark") : Label("Chỉ tiếng bip", systemImage: "speaker.wave.1") }
+            Button { audioModeRaw = ADASAudioMode.allWarnings.rawValue } label: { audioMode == .allWarnings ? Label("Tất cả cảnh báo", systemImage: "checkmark") : Label("Tất cả cảnh báo", systemImage: "speaker.wave.3") }
         } label: {
             Image(systemName: audioMode == .beepOnly ? "speaker.wave.1.fill" : "speaker.wave.3.fill")
-                .font(.system(size: 19, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 42, height: 42)
-                .background(.black.opacity(0.58), in: Circle())
-                .overlay(Circle().stroke(.white.opacity(0.55), lineWidth: 1))
+                .font(.system(size: 19, weight: .bold)).foregroundStyle(.white).frame(width: 42, height: 42)
+                .background(.black.opacity(0.58), in: Circle()).overlay(Circle().stroke(.white.opacity(0.55), lineWidth: 1))
         }
     }
 
@@ -130,7 +99,9 @@ struct DriveView: View {
         warningManager.update(distance: distance, lane: lane, trafficSign: TrafficSignState(), vehicleSpeedKPH: vehicleSpeedMonitor.speedKPH)
     }
 
-    private func configureSelectedSource() {
+    private func configureSelectedSource(force: Bool = false) {
+        guard force || configuredSourceRaw != cameraSourceRaw else { return }
+        configuredSourceRaw = cameraSourceRaw
         switch selectedSource {
         case .seventyMai:
             cameraManager.stop()
@@ -155,10 +126,8 @@ struct DriveView: View {
 
 private struct ADASButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.font(.caption.bold()).foregroundStyle(.white)
-            .padding(.horizontal, 18).padding(.vertical, 11)
+        configuration.label.font(.caption.bold()).foregroundStyle(.white).padding(.horizontal, 18).padding(.vertical, 11)
             .background(.black.opacity(configuration.isPressed ? 0.75 : 0.5))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(.white.opacity(0.5), lineWidth: 1))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(.white.opacity(0.5), lineWidth: 1)).clipShape(RoundedRectangle(cornerRadius: 10))
     }
 }
