@@ -24,9 +24,6 @@ final class FrameProcessor: ObservableObject {
     @Published private(set) var trafficSignStatus = "SIGN AI READY"
 
     var horizontalFieldOfViewDegrees: Double = 0
-    /// For dashcams whose advertised angle is diagonal/marketing FOV rather than
-    /// the decoded stream's usable pinhole horizontal FOV. Value is referenced
-    /// to a 1920-pixel-wide frame and scaled automatically for other resolutions.
     var effectiveFocalPixelsAt1920: Double?
 
     private var totalFrames: UInt64 = 0
@@ -34,7 +31,10 @@ final class FrameProcessor: ObservableObject {
     private var inferenceFrameCounter = 0
     private var laneFrameCounter = 1
     private var signFrameCounter = 0
-    private let inferenceStride = 2
+    // 70mai native path intentionally drops frames upstream while AI is busy,
+    // so running vehicle inference on every accepted frame minimizes detection
+    // latency without allowing a backlog to accumulate.
+    private let inferenceStride = 1
     private let laneStride = 2
     private let signStride = 2
     private var lastVehicleSeenAt: TimeInterval = 0
@@ -195,7 +195,6 @@ final class FrameProcessor: ObservableObject {
 
         let now = ProcessInfo.processInfo.systemUptime
         let shouldPublishMetrics = now - lastPublishedAt >= 0.25
-
         guard shouldPublishMetrics || newDetections != nil || laneWasEvaluated || newTrafficSignState != nil else { return }
 
         if shouldPublishMetrics { lastPublishedAt = now }
@@ -227,7 +226,6 @@ final class FrameProcessor: ObservableObject {
             if laneWasEvaluated {
                 self.laneDetection = newLaneDetection
                 if let newLaneState { self.laneDepartureState = newLaneState }
-
                 if let lane = newLaneDetection {
                     self.laneStatus = String(
                         format: "LANE ACTIVE • %.0f%% • OFFSET %+.2f",
@@ -244,10 +242,7 @@ final class FrameProcessor: ObservableObject {
         }
     }
 
-    private func leadVehicleIndex(
-        in detections: [VehicleDetection],
-        lane: LaneDetection
-    ) -> Int? {
+    private func leadVehicleIndex(in detections: [VehicleDetection], lane: LaneDetection) -> Int? {
         let candidates = detections.indices.filter { index in
             let box = detections[index].boundingBox
             let contactY = 1.0 - Double(box.minY)
@@ -257,7 +252,6 @@ final class FrameProcessor: ObservableObject {
             let contactX = Double(box.midX)
             return contactX >= leftX && contactX <= rightX
         }
-
         return candidates.max { lhs, rhs in
             let a = detections[lhs].boundingBox
             let b = detections[rhs].boundingBox
