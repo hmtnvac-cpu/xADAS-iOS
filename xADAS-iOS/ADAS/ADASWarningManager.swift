@@ -4,32 +4,21 @@ import Combine
 import Foundation
 
 enum ADASAudioMode: String, CaseIterable, Identifiable {
-    case beepOnly
-    case allWarnings
-
+    case beepOnly, allWarnings
     var id: String { rawValue }
-    var title: String {
-        switch self {
-        case .beepOnly: return "Chỉ tiếng bip"
-        case .allWarnings: return "Tất cả cảnh báo"
-        }
-    }
+    var title: String { self == .beepOnly ? "Chỉ tiếng bip" : "Tất cả cảnh báo" }
 }
 
 final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegate, AVSpeechSynthesizerDelegate {
     static let volumeKey = "xadas.warning.volume"
     static let vibrationKey = "xadas.warning.vibration"
     static let audioModeKey = "xadas.warning.audioMode"
-
-    /// Only following-distance alerts are highway/high-speed gated.
     static let minimumDistanceAlertSpeedKPH = 60.0
 
     private var player: AVAudioPlayer?
     private let speechSynthesizer = AVSpeechSynthesizer()
-    private var lastDistanceAlertAt: TimeInterval = 0
-    private var lastLaneAlertAt: TimeInterval = 0
-    private var lastOverspeedAlertAt: TimeInterval = 0
-    private var lastSpeechAt: TimeInterval = 0
+    private var lastDistanceAlertAt: TimeInterval = 0, lastLaneAlertAt: TimeInterval = 0
+    private var lastOverspeedAlertAt: TimeInterval = 0, lastSpeechAt: TimeInterval = 0
     private var lastSpokenKey = ""
     private var lastDistanceRisk: LeadDistanceRisk = .unavailable
     private var lastLaneState: LaneDepartureState = .unavailable
@@ -38,150 +27,75 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
 
     override init() {
         super.init()
-        UserDefaults.standard.register(defaults: [
-            Self.volumeKey: 0.35,
-            Self.vibrationKey: true,
-            Self.audioModeKey: ADASAudioMode.allWarnings.rawValue
-        ])
+        UserDefaults.standard.register(defaults: [Self.volumeKey: 0.35, Self.vibrationKey: true, Self.audioModeKey: ADASAudioMode.allWarnings.rawValue])
         player = try? AVAudioPlayer(data: Self.makeBeepWAV())
-        player?.delegate = self
-        player?.prepareToPlay()
-        speechSynthesizer.delegate = self
+        player?.delegate = self; player?.prepareToPlay(); speechSynthesizer.delegate = self
+        // Deliberately do not configure or activate AVAudioSession during init.
     }
 
-    private var warningVolume: Float {
-        Float(min(max(UserDefaults.standard.double(forKey: Self.volumeKey), 0), 1))
-    }
+    private var warningVolume: Float { Float(min(max(UserDefaults.standard.double(forKey: Self.volumeKey), 0), 1)) }
+    private var vibrationEnabled: Bool { UserDefaults.standard.bool(forKey: Self.vibrationKey) }
+    private var audioMode: ADASAudioMode { ADASAudioMode(rawValue: UserDefaults.standard.string(forKey: Self.audioModeKey) ?? "") ?? .allWarnings }
 
-    private var vibrationEnabled: Bool {
-        UserDefaults.standard.bool(forKey: Self.vibrationKey)
-    }
-
-    private var audioMode: ADASAudioMode {
-        ADASAudioMode(rawValue: UserDefaults.standard.string(forKey: Self.audioModeKey) ?? "") ?? .allWarnings
-    }
-
-    func update(
-        distance: LeadDistanceState,
-        lane: LaneDepartureState,
-        trafficSign: TrafficSignState,
-        vehicleSpeedKPH: Double
-    ) {
+    func update(distance: LeadDistanceState, lane: LaneDepartureState, trafficSign: TrafficSignState, vehicleSpeedKPH: Double) {
         announceNewTrafficSignIfNeeded(trafficSign)
-
         let now = ProcessInfo.processInfo.systemUptime
 
-        // LANE DEPARTURE IS NOT HIGHWAY-GATED.
-        // It must remain available in town and during normal lane changes/tests.
         let laneWarning = lane == .warningLeft || lane == .warningRight
         let previousLaneWarning = lastLaneState == .warningLeft || lastLaneState == .warningRight
-        let laneWarningDue = laneWarning
-            && (!previousLaneWarning || lane != lastLaneState || now - lastLaneAlertAt >= 3.0)
-
-        if laneWarningDue {
-            let isLeft = lane == .warningLeft
-            alert(
-                strong: false,
-                message: isLeft ? "Cảnh báo lệch làn trái" : "Cảnh báo lệch làn phải",
-                key: isLeft ? "lane-left" : "lane-right"
-            )
+        if laneWarning && (!previousLaneWarning || lane != lastLaneState || now - lastLaneAlertAt >= 3.0) {
+            let left = lane == .warningLeft
+            alert(strong: false, message: left ? "Cảnh báo lệch làn trái" : "Cảnh báo lệch làn phải", key: left ? "lane-left" : "lane-right")
             lastLaneAlertAt = now
         }
         lastLaneState = lane
 
-        // FOLLOWING DISTANCE is the part that should stay quiet in city traffic.
-        // Below/at 60 km/h we keep measuring and displaying distance, but do not
-        // produce distance beep/voice alerts.
-        guard vehicleSpeedKPH > Self.minimumDistanceAlertSpeedKPH else {
-            lastDistanceRisk = .unavailable
-            return
-        }
+        guard vehicleSpeedKPH > Self.minimumDistanceAlertSpeedKPH else { lastDistanceRisk = .unavailable; return }
 
-        if let limit = trafficSign.explicitSpeedLimitKPH,
-           vehicleSpeedKPH >= Double(limit) + 5.0,
-           now - lastOverspeedAlertAt >= 6.0 {
-            alert(
-                strong: true,
-                message: "Cảnh báo quá tốc độ. Giới hạn \(limit) ki lô mét một giờ",
-                key: "overspeed-\(limit)"
-            )
+        if let limit = trafficSign.explicitSpeedLimitKPH, vehicleSpeedKPH >= Double(limit) + 5, now - lastOverspeedAlertAt >= 6 {
+            alert(strong: true, message: "Cảnh báo quá tốc độ. Giới hạn \(limit) ki lô mét một giờ", key: "overspeed-\(limit)")
             lastOverspeedAlertAt = now
         }
 
-        let distanceDangerDue = distance.risk == .danger
-            && (lastDistanceRisk != .danger || now - lastDistanceAlertAt >= 2.0)
-        let distanceCautionDue = distance.risk == .caution
-            && lastDistanceRisk != .caution
-            && now - lastDistanceAlertAt >= 1.2
-
-        if distanceDangerDue {
-            alert(strong: true, message: "Cảnh báo, khoảng cách quá gần", key: "distance-danger")
-            lastDistanceAlertAt = now
-        } else if distanceCautionDue {
-            alert(strong: false, message: "Chú ý khoảng cách", key: "distance-caution")
-            lastDistanceAlertAt = now
-        }
+        let danger = distance.risk == .danger && (lastDistanceRisk != .danger || now - lastDistanceAlertAt >= 2)
+        let caution = distance.risk == .caution && lastDistanceRisk != .caution && now - lastDistanceAlertAt >= 1.2
+        if danger { alert(strong: true, message: "Cảnh báo, khoảng cách quá gần", key: "distance-danger"); lastDistanceAlertAt = now }
+        else if caution { alert(strong: false, message: "Chú ý khoảng cách", key: "distance-caution"); lastDistanceAlertAt = now }
         lastDistanceRisk = distance.risk
     }
 
     private func announceNewTrafficSignIfNeeded(_ state: TrafficSignState) {
-        guard state.updatedAt > 0,
-              state.updatedAt != lastTrafficSignUpdatedAt,
-              let sign = state.lastConfirmedSign else { return }
-
+        guard state.updatedAt > 0, state.updatedAt != lastTrafficSignUpdatedAt, let sign = state.lastConfirmedSign else { return }
         lastTrafficSignUpdatedAt = state.updatedAt
         guard sign != lastTrafficSign else { return }
         lastTrafficSign = sign
-
         switch sign {
-        case .speedLimit(let value):
-            alert(strong: false, message: "Giới hạn tốc độ \(value) ki lô mét một giờ", key: "sign-limit-\(value)", forceSpeech: true)
-        case .denseAreaStart:
-            alert(strong: false, message: "Bắt đầu khu đông dân cư", key: "sign-dense-start", forceSpeech: true)
-        case .denseAreaEnd:
-            alert(strong: false, message: "Hết khu đông dân cư", key: "sign-dense-end", forceSpeech: true)
+        case .speedLimit(let value): alert(strong: false, message: "Giới hạn tốc độ \(value) ki lô mét một giờ", key: "sign-limit-\(value)", forceSpeech: true)
+        case .denseAreaStart: alert(strong: false, message: "Bắt đầu khu đông dân cư", key: "sign-dense-start", forceSpeech: true)
+        case .denseAreaEnd: alert(strong: false, message: "Hết khu đông dân cư", key: "sign-dense-end", forceSpeech: true)
         }
     }
 
-    func testWarning() {
-        alert(strong: true, message: "Hệ thống cảnh báo hoạt động", key: "test", forceSpeech: true)
-    }
+    func testWarning() { alert(strong: true, message: "Hệ thống cảnh báo hoạt động", key: "test", forceSpeech: true) }
 
-    private func alert(
-        strong: Bool,
-        message: String,
-        key: String,
-        forceSpeech: Bool = false
-    ) {
+    private func alert(strong: Bool, message: String, key: String, forceSpeech: Bool = false) {
         activateWarningAudio()
         let volume = warningVolume
-        player?.currentTime = 0
-        player?.volume = strong ? min(volume * 1.15, 1) : volume
-        player?.play()
-        if vibrationEnabled {
-            AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
-        }
-
+        player?.currentTime = 0; player?.volume = strong ? min(volume * 1.15, 1) : volume; player?.play()
+        if vibrationEnabled { AudioServicesPlaySystemSound(kSystemSoundID_Vibrate) }
         guard audioMode == .allWarnings else { return }
-
         let now = ProcessInfo.processInfo.systemUptime
-        guard forceSpeech || key != lastSpokenKey || now - lastSpeechAt >= 5.0 else { return }
-
-        if speechSynthesizer.isSpeaking {
-            speechSynthesizer.stopSpeaking(at: .immediate)
-        }
+        guard forceSpeech || key != lastSpokenKey || now - lastSpeechAt >= 5 else { return }
+        if speechSynthesizer.isSpeaking { speechSynthesizer.stopSpeaking(at: .immediate) }
         let utterance = AVSpeechUtterance(string: message)
-        utterance.voice = AVSpeechSynthesisVoice(language: "vi-VN")
-        utterance.rate = 0.50
-        utterance.volume = volume
-        speechSynthesizer.speak(utterance)
-        lastSpokenKey = key
-        lastSpeechAt = now
+        utterance.voice = AVSpeechSynthesisVoice(language: "vi-VN"); utterance.rate = 0.50; utterance.volume = volume
+        speechSynthesizer.speak(utterance); lastSpokenKey = key; lastSpeechAt = now
     }
 
     private func activateWarningAudio() {
         let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .voicePrompt, options: [.mixWithOthers, .duckOthers])
+        // Mix only: Ivy must not duck/pause music, CarPlay or tweak audio sessions.
+        try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
         try? session.setActive(true)
     }
 
@@ -190,58 +104,25 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }
 
-    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        releaseWarningAudioIfIdle()
-    }
-
-    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        releaseWarningAudioIfIdle()
-    }
-
-    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        releaseWarningAudioIfIdle()
-    }
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) { releaseWarningAudioIfIdle() }
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) { releaseWarningAudioIfIdle() }
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) { releaseWarningAudioIfIdle() }
 
     private static func makeBeepWAV() -> Data {
-        let sampleRate = 22_050
-        let duration = 0.18
-        let frequency = 880.0
-        let count = Int(Double(sampleRate) * duration)
-        var pcm = Data(capacity: count * 2)
-
+        let sampleRate = 22_050, duration = 0.18, frequency = 880.0
+        let count = Int(Double(sampleRate) * duration); var pcm = Data(capacity: count * 2)
         for index in 0..<count {
-            let t = Double(index) / Double(sampleRate)
-            let fade = min(1.0, min(t / 0.02, (duration - t) / 0.04))
-            let sample = sin(2.0 * .pi * frequency * t) * 0.32 * max(0, fade)
+            let t = Double(index) / Double(sampleRate), fade = min(1.0, min(t / 0.02, (duration - t) / 0.04))
+            let sample = sin(2 * .pi * frequency * t) * 0.32 * max(0, fade)
             var value = Int16(max(-1, min(1, sample)) * Double(Int16.max)).littleEndian
             withUnsafeBytes(of: &value) { pcm.append(contentsOf: $0) }
         }
-
         var data = Data()
-        func appendASCII(_ string: String) { data.append(string.data(using: .ascii)!) }
-        func appendUInt32(_ value: UInt32) {
-            var v = value.littleEndian
-            withUnsafeBytes(of: &v) { data.append(contentsOf: $0) }
-        }
-        func appendUInt16(_ value: UInt16) {
-            var v = value.littleEndian
-            withUnsafeBytes(of: &v) { data.append(contentsOf: $0) }
-        }
-
-        appendASCII("RIFF")
-        appendUInt32(UInt32(36 + pcm.count))
-        appendASCII("WAVE")
-        appendASCII("fmt ")
-        appendUInt32(16)
-        appendUInt16(1)
-        appendUInt16(1)
-        appendUInt32(UInt32(sampleRate))
-        appendUInt32(UInt32(sampleRate * 2))
-        appendUInt16(2)
-        appendUInt16(16)
-        appendASCII("data")
-        appendUInt32(UInt32(pcm.count))
-        data.append(pcm)
+        func ascii(_ s: String) { data.append(s.data(using: .ascii)!) }
+        func u32(_ x: UInt32) { var v = x.littleEndian; withUnsafeBytes(of: &v) { data.append(contentsOf: $0) } }
+        func u16(_ x: UInt16) { var v = x.littleEndian; withUnsafeBytes(of: &v) { data.append(contentsOf: $0) } }
+        ascii("RIFF"); u32(UInt32(36 + pcm.count)); ascii("WAVE"); ascii("fmt "); u32(16); u16(1); u16(1)
+        u32(UInt32(sampleRate)); u32(UInt32(sampleRate * 2)); u16(2); u16(16); ascii("data"); u32(UInt32(pcm.count)); data.append(pcm)
         return data
     }
 }
