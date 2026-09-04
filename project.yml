@@ -32,10 +32,9 @@ targets:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         SeventyMaiToken: "__SEVENTYMAI_TOKEN__"
-        MapboxAccessToken: "__MAPBOX_TOKEN__"
         NSCameraUsageDescription: "Ivy uses the camera for real-time driver-assistance vision processing."
         NSLocalNetworkUsageDescription: "Ivy connects directly to your 70mai dashcam on its local Wi-Fi network to receive the RTSP video stream."
-        NSLocationWhenInUseUsageDescription: "Ivy uses GPS for vehicle speed and driver-assistance logic."
+        NSLocationWhenInUseUsageDescription: "Ivy uses GPS for vehicle speed, OpenStreetMap road matching, speed-limit data, and driver-assistance logic."
         UIRequiresFullScreen: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationLandscapeLeft
