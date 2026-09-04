@@ -22,6 +22,7 @@ struct ADASOverlayView: View {
     let cameraSpeedLimitKPH: Int?
     let mapStatus: String
     let vehicleSpeedKPH: Double
+    let navigationSummary: IvyNavigationSummary?
 
     var body: some View {
         GeometryReader { proxy in
@@ -55,6 +56,11 @@ struct ADASOverlayView: View {
                 gpsSpeedometer.position(x: 64, y: proxy.size.height - 72)
                 speedLimitBadge.position(x: 112, y: proxy.size.height - 111)
                 compactDistanceHUD.position(x: proxy.size.width - 62, y: proxy.size.height - 68)
+
+                if let navigationSummary {
+                    navigationCard(navigationSummary)
+                        .position(x: proxy.size.width - 170, y: proxy.size.height - 150)
+                }
 
                 if let warning = laneDepartureState.displayText {
                     Text("⚠︎ \(warning)")
@@ -92,6 +98,39 @@ struct ADASOverlayView: View {
         }
         .frame(width: 38, height: 38)
         .opacity(mapSpeedLimitKPH == nil ? 0.72 : 1.0)
+    }
+
+    private func navigationCard(_ summary: IvyNavigationSummary) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: maneuverSymbol(summary.modifier))
+                .font(.system(size: 28, weight: .bold))
+                .frame(width: 34)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(formatDistance(summary.maneuverDistanceMeters))
+                        .font(.system(size: 19, weight: .black, design: .rounded))
+                    Text(summary.instruction)
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .lineLimit(1)
+                }
+                Text(summary.destinationName)
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.78))
+                    .lineLimit(1)
+                HStack(spacing: 10) {
+                    Text("ETA \(formatETA(summary.remainingDurationSeconds))")
+                    Text(formatDuration(summary.remainingDurationSeconds))
+                    Text(formatDistance(summary.remainingDistanceMeters))
+                }
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.82))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(width: 300, alignment: .leading)
+        .background(.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.28), lineWidth: 1))
     }
 
     private var compactDistanceHUD: some View {
@@ -214,5 +253,36 @@ struct ADASOverlayView: View {
         }
         if let last = mapped.last { path.addLine(to: last) }
         return path
+    }
+
+    private func maneuverSymbol(_ modifier: String?) -> String {
+        switch modifier {
+        case "left": return "arrow.turn.up.left"
+        case "sharp left": return "arrow.turn.up.left"
+        case "slight left": return "arrow.up.left"
+        case "right": return "arrow.turn.up.right"
+        case "sharp right": return "arrow.turn.up.right"
+        case "slight right": return "arrow.up.right"
+        case "uturn": return "arrow.uturn.backward"
+        default: return "arrow.up"
+        }
+    }
+
+    private func formatDistance(_ meters: Double) -> String {
+        if meters >= 1000 { return String(format: "%.1f km", meters / 1000) }
+        return "\(Int(meters.rounded())) m"
+    }
+
+    private func formatDuration(_ seconds: Double) -> String {
+        let minutes = max(1, Int((seconds / 60).rounded()))
+        if minutes >= 60 { return "\(minutes / 60)h \(minutes % 60)m" }
+        return "\(minutes) min"
+    }
+
+    private func formatETA(_ seconds: Double) -> String {
+        let date = Date().addingTimeInterval(seconds)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
     }
 }
