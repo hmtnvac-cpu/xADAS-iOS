@@ -12,12 +12,14 @@
     <string>$(CURRENT_PROJECT_VERSION)</string>
     <key>SeventyMaiToken</key>
     <string>__SEVENTYMAI_TOKEN__</string>
+    <key>MapboxAccessToken</key>
+    <string>__MAPBOX_TOKEN__</string>
     <key>NSCameraUsageDescription</key>
     <string>Ivy uses the rear camera for real-time driver-assistance vision processing.</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>Ivy connects directly to your 70mai dashcam on its local Wi-Fi network to receive the RTSP video stream.</string>
     <key>NSLocationWhenInUseUsageDescription</key>
-    <string>Ivy uses GPS for vehicle speed and driver-assistance logic.</string>
+    <string>Ivy uses GPS for vehicle speed, road matching, speed-limit data, and driver-assistance logic.</string>
     <key>UISupportedInterfaceOrientations</key>
     <array>
         <string>UIInterfaceOrientationLandscapeLeft</string>
