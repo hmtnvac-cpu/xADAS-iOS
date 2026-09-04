@@ -2,30 +2,15 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleDisplayName</key>
-    <string>Ivy</string>
-    <key>CFBundleName</key>
-    <string>Ivy</string>
-    <key>CFBundleShortVersionString</key>
-    <string>$(MARKETING_VERSION)</string>
-    <key>CFBundleVersion</key>
-    <string>$(CURRENT_PROJECT_VERSION)</string>
-    <key>SeventyMaiToken</key>
-    <string>__SEVENTYMAI_TOKEN__</string>
-    <key>MapboxAccessToken</key>
-    <string>__MAPBOX_TOKEN__</string>
-    <key>NSCameraUsageDescription</key>
-    <string>Ivy uses the rear camera for real-time driver-assistance vision processing.</string>
-    <key>NSLocalNetworkUsageDescription</key>
-    <string>Ivy connects directly to your 70mai dashcam on its local Wi-Fi network to receive the RTSP video stream.</string>
-    <key>NSLocationWhenInUseUsageDescription</key>
-    <string>Ivy uses GPS for vehicle speed, road matching, speed-limit data, and driver-assistance logic.</string>
-    <key>UISupportedInterfaceOrientations</key>
-    <array>
-        <string>UIInterfaceOrientationLandscapeLeft</string>
-        <string>UIInterfaceOrientationLandscapeRight</string>
-    </array>
-    <key>UIRequiresFullScreen</key>
-    <true/>
+    <key>CFBundleDisplayName</key><string>Ivy</string>
+    <key>CFBundleName</key><string>Ivy</string>
+    <key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+    <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>SeventyMaiToken</key><string>__SEVENTYMAI_TOKEN__</string>
+    <key>NSCameraUsageDescription</key><string>Ivy uses the rear camera for real-time driver-assistance vision processing.</string>
+    <key>NSLocalNetworkUsageDescription</key><string>Ivy connects directly to your 70mai dashcam on its local Wi-Fi network to receive the RTSP video stream.</string>
+    <key>NSLocationWhenInUseUsageDescription</key><string>Ivy uses GPS for vehicle speed, OpenStreetMap road matching, speed-limit data, and driver-assistance logic.</string>
+    <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+    <key>UIRequiresFullScreen</key><true/>
 </dict>
 </plist>
