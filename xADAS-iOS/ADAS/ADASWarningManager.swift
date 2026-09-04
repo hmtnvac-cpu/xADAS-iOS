@@ -20,7 +20,9 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
     static let volumeKey = "xadas.warning.volume"
     static let vibrationKey = "xadas.warning.vibration"
     static let audioModeKey = "xadas.warning.audioMode"
-    static let minimumActiveSpeedKPH = 60.0
+
+    /// Only following-distance alerts are highway/high-speed gated.
+    static let minimumDistanceAlertSpeedKPH = 60.0
 
     private var player: AVAudioPlayer?
     private let speechSynthesizer = AVSpeechSynthesizer()
@@ -67,18 +69,42 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
     ) {
         announceNewTrafficSignIfNeeded(trafficSign)
 
-        guard vehicleSpeedKPH > Self.minimumActiveSpeedKPH else {
+        let now = ProcessInfo.processInfo.systemUptime
+
+        // LANE DEPARTURE IS NOT HIGHWAY-GATED.
+        // It must remain available in town and during normal lane changes/tests.
+        let laneWarning = lane == .warningLeft || lane == .warningRight
+        let previousLaneWarning = lastLaneState == .warningLeft || lastLaneState == .warningRight
+        let laneWarningDue = laneWarning
+            && (!previousLaneWarning || lane != lastLaneState || now - lastLaneAlertAt >= 3.0)
+
+        if laneWarningDue {
+            let isLeft = lane == .warningLeft
+            alert(
+                strong: false,
+                message: isLeft ? "Cảnh báo lệch làn trái" : "Cảnh báo lệch làn phải",
+                key: isLeft ? "lane-left" : "lane-right"
+            )
+            lastLaneAlertAt = now
+        }
+        lastLaneState = lane
+
+        // FOLLOWING DISTANCE is the part that should stay quiet in city traffic.
+        // Below/at 60 km/h we keep measuring and displaying distance, but do not
+        // produce distance beep/voice alerts.
+        guard vehicleSpeedKPH > Self.minimumDistanceAlertSpeedKPH else {
             lastDistanceRisk = .unavailable
-            lastLaneState = .unavailable
             return
         }
-
-        let now = ProcessInfo.processInfo.systemUptime
 
         if let limit = trafficSign.explicitSpeedLimitKPH,
            vehicleSpeedKPH >= Double(limit) + 5.0,
            now - lastOverspeedAlertAt >= 6.0 {
-            alert(strong: true, message: "Cảnh báo quá tốc độ. Giới hạn \(limit) ki lô mét một giờ", key: "overspeed-\(limit)")
+            alert(
+                strong: true,
+                message: "Cảnh báo quá tốc độ. Giới hạn \(limit) ki lô mét một giờ",
+                key: "overspeed-\(limit)"
+            )
             lastOverspeedAlertAt = now
         }
 
@@ -87,26 +113,15 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
         let distanceCautionDue = distance.risk == .caution
             && lastDistanceRisk != .caution
             && now - lastDistanceAlertAt >= 1.2
-        let laneWarning = lane == .warningLeft || lane == .warningRight
-        let previousLaneWarning = lastLaneState == .warningLeft || lastLaneState == .warningRight
-        let laneWarningDue = laneWarning
-            && (!previousLaneWarning || lane != lastLaneState || now - lastLaneAlertAt >= 3.0)
 
         if distanceDangerDue {
             alert(strong: true, message: "Cảnh báo, khoảng cách quá gần", key: "distance-danger")
             lastDistanceAlertAt = now
-        } else if laneWarningDue {
-            let isLeft = lane == .warningLeft
-            alert(strong: false,
-                  message: isLeft ? "Cảnh báo lệch làn trái" : "Cảnh báo lệch làn phải",
-                  key: isLeft ? "lane-left" : "lane-right")
-            lastLaneAlertAt = now
         } else if distanceCautionDue {
             alert(strong: false, message: "Chú ý khoảng cách", key: "distance-caution")
             lastDistanceAlertAt = now
         }
         lastDistanceRisk = distance.risk
-        lastLaneState = lane
     }
 
     private func announceNewTrafficSignIfNeeded(_ state: TrafficSignState) {
