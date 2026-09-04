@@ -28,8 +28,15 @@ struct ADASOverlayView: View {
             ZStack {
                 VStack {
                     HStack(alignment: .top) {
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text("xADAS").font(.headline.bold())
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 4) {
+                                Text("Ivy")
+                                    .font(.system(size: 24, weight: .black, design: .rounded))
+                                    .italic()
+                                Text("♥")
+                                    .font(.system(size: 20, weight: .black, design: .rounded))
+                                    .foregroundStyle(.pink)
+                            }
                             HStack(spacing: 5) {
                                 Circle().fill(isCameraRunning ? .green : .yellow).frame(width: 7, height: 7)
                                 Text(cameraLabel).font(.caption2.monospaced().bold())
@@ -47,20 +54,22 @@ struct ADASOverlayView: View {
                     Spacer()
                 }
 
-                ForEach(detections) { detection in detectionBox(detection, in: proxy.size) }
+                // White = detected physical ego-lane boundaries.
                 if let laneDetection { laneOverlay(laneDetection, in: proxy.size) }
+                // Blue = fixed forward vehicle/distance corridor. It is deliberately
+                // separate from Lane AI and stays visually stable on screen.
+                distanceCorridor(in: proxy.size)
 
-                gpsSpeedometer
-                    .position(x: 64, y: proxy.size.height - 72)
+                ForEach(detections) { detection in detectionBox(detection, in: proxy.size) }
 
-                compactDistanceHUD
-                    .position(x: proxy.size.width - 62, y: proxy.size.height - 68)
+                gpsSpeedometer.position(x: 64, y: proxy.size.height - 72)
+                compactDistanceHUD.position(x: proxy.size.width - 62, y: proxy.size.height - 68)
 
                 if let warning = laneDepartureState.displayText {
                     Text("⚠︎ \(warning)")
                         .font(.headline.monospaced().bold()).foregroundStyle(.white)
                         .padding(.horizontal, 16).padding(.vertical, 8)
-                        .background(.red.opacity(0.92), in: RoundedRectangle(cornerRadius: 10))
+                        .background(.red.opacity(0.90), in: RoundedRectangle(cornerRadius: 10))
                         .position(x: proxy.size.width / 2, y: proxy.size.height * 0.20)
                 }
             }
@@ -72,18 +81,13 @@ struct ADASOverlayView: View {
     private var gpsSpeedometer: some View {
         ZStack {
             Circle().fill(.black.opacity(0.58))
-            Circle().stroke(.white.opacity(0.75), lineWidth: 2.5)
-            Circle().stroke(.white.opacity(0.16), lineWidth: 7).padding(5)
+            Circle().stroke(.white.opacity(0.75), lineWidth: 1.5)
             VStack(spacing: -1) {
                 Text(String(Int(vehicleSpeedKPH.rounded())))
-                    .font(.system(size: 27, weight: .black, design: .rounded))
-                    .monospacedDigit()
-                Text("km/h")
-                    .font(.system(size: 9, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.82))
+                    .font(.system(size: 27, weight: .black, design: .rounded)).monospacedDigit()
+                Text("km/h").font(.system(size: 9, weight: .bold, design: .rounded)).foregroundStyle(.white.opacity(0.82))
             }
-        }
-        .frame(width: 72, height: 72)
+        }.frame(width: 72, height: 72)
     }
 
     private var compactDistanceHUD: some View {
@@ -93,7 +97,7 @@ struct ADASOverlayView: View {
                 .font(.system(size: 16, weight: .black, design: .rounded))
         }
         .padding(.horizontal, 9).padding(.vertical, 6)
-        .background(distanceColor.opacity(leadDistanceState.distanceMeters == nil ? 0.48 : 0.86), in: RoundedRectangle(cornerRadius: 8))
+        .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private var cameraLabel: String {
@@ -124,21 +128,22 @@ struct ADASOverlayView: View {
         case .safe: return .green
         case .caution: return .orange
         case .danger: return .red
-        case .unavailable: return .black
+        case .unavailable: return .white
         }
     }
 
     @ViewBuilder private func detectionBox(_ detection: VehicleDetection, in size: CGSize) -> some View {
         let rect = displayRect(for: detection.boundingBox, in: size)
-        let color: Color = detection.isLead ? distanceColor : .green
-        ZStack(alignment: .topLeading) {
-            RoundedRectangle(cornerRadius: 5).stroke(color, lineWidth: detection.isLead ? 4 : 2)
-            if detection.isLead, let distance = detection.distanceMeters {
-                Text(String(format: "%.1f m", distance)).font(.caption2.monospaced().bold()).foregroundStyle(.black)
-                    .padding(.horizontal, 5).padding(.vertical, 3).background(color).offset(y: -22)
+        if detection.isLead {
+            ZStack(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: 4).stroke(distanceColor.opacity(0.88), lineWidth: 1.5)
+                if let distance = detection.distanceMeters {
+                    Text(String(format: "%.1f m", distance)).font(.caption2.monospaced().bold()).foregroundStyle(.white)
+                        .padding(.horizontal, 5).padding(.vertical, 3).background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 4)).offset(y: -22)
+                }
             }
+            .frame(width: max(rect.width, 1), height: max(rect.height, 1)).position(x: rect.midX, y: rect.midY)
         }
-        .frame(width: max(rect.width, 1), height: max(rect.height, 1)).position(x: rect.midX, y: rect.midY)
     }
 
     private func displayRect(for normalized: CGRect, in size: CGSize) -> CGRect {
@@ -150,14 +155,24 @@ struct ADASOverlayView: View {
         Canvas { context, canvasSize in
             let left = smoothPath(stabilizedLanePoints(lane.leftPoints), in: canvasSize)
             let right = smoothPath(stabilizedLanePoints(lane.rightPoints), in: canvasSize)
-            let leftWarning = laneDepartureState == .warningLeft
-            let rightWarning = laneDepartureState == .warningRight
-            let leftColor: Color = leftWarning ? .red : .green
-            let rightColor: Color = rightWarning ? .red : .green
-            context.stroke(left, with: .color(leftColor.opacity(0.22)), lineWidth: leftWarning ? 8 : 5)
-            context.stroke(right, with: .color(rightColor.opacity(0.22)), lineWidth: rightWarning ? 8 : 5)
-            context.stroke(left, with: .color(leftColor), lineWidth: leftWarning ? 4 : 2.5)
-            context.stroke(right, with: .color(rightColor), lineWidth: rightWarning ? 4 : 2.5)
+            // Physical lane markings are always thin white guides. Warning state is
+            // communicated separately, so the road image remains clean.
+            context.stroke(left, with: .color(.white.opacity(0.92)), lineWidth: 1.35)
+            context.stroke(right, with: .color(.white.opacity(0.92)), lineWidth: 1.35)
+        }
+    }
+
+    private func distanceCorridor(in size: CGSize) -> some View {
+        Canvas { context, canvasSize in
+            let bottomY = canvasSize.height * 0.94
+            let topY = canvasSize.height * 0.48
+            let bottomHalf = canvasSize.width * 0.235
+            let topHalf = canvasSize.width * 0.075
+            let centerX = canvasSize.width * 0.50
+            var left = Path(); left.move(to: CGPoint(x: centerX - bottomHalf, y: bottomY)); left.addLine(to: CGPoint(x: centerX - topHalf, y: topY))
+            var right = Path(); right.move(to: CGPoint(x: centerX + bottomHalf, y: bottomY)); right.addLine(to: CGPoint(x: centerX + topHalf, y: topY))
+            context.stroke(left, with: .color(.blue.opacity(0.88)), lineWidth: 1.25)
+            context.stroke(right, with: .color(.blue.opacity(0.88)), lineWidth: 1.25)
         }
     }
 
