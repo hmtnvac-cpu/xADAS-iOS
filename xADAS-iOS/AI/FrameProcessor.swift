@@ -59,8 +59,6 @@ final class FrameProcessor: ObservableObject {
             inferenceFrameCounter = 0
             do {
                 let result = try detector.detect(pixelBuffer: pixelBuffer)
-                // Detector may see the whole road, but only an ego-lane + reticle target
-                // is published/used for distance. Adjacent-lane vehicles never receive range.
                 newDetections = result.detections.map { $0.markingLead(false) }
                 newInferenceMS = result.inferenceMS
             } catch {
@@ -96,8 +94,6 @@ final class FrameProcessor: ObservableObject {
                 leadDistanceTracker.reset()
                 newLeadState = LeadDistanceState(distanceMeters: nil, closingSpeedMetersPerSecond: nil, risk: .unavailable)
             }
-            // UI should not draw boxes on irrelevant traffic. Only the selected forward
-            // lead target inside both gates is retained on screen.
             measured = measured.filter { $0.isLead }
             newDetections = measured
         }
@@ -111,12 +107,12 @@ final class FrameProcessor: ObservableObject {
             guard let self else { return }
             if shouldPublishMetrics {
                 self.frameWidth = width; self.frameHeight = height; self.processedFrames = count
-                self.pipelineStatus = "FRAME PIPELINE ACTIVE • EGO ROI"
+                self.pipelineStatus = "FRAME PIPELINE ACTIVE • IVY EGO ROI"
             }
             if let newDetections {
                 self.detections = newDetections
                 if let newLeadState { self.leadDistanceState = newLeadState; self.leadDistanceMeters = newLeadState.distanceMeters }
-                self.detectorStatus = newDetections.isEmpty ? "LEAD SEARCH • EGO ROI" : "LEAD LOCK • EGO ROI"
+                self.detectorStatus = newDetections.isEmpty ? "LEAD SEARCH • IVY CORRIDOR" : "LEAD LOCK • IVY CORRIDOR"
             }
             if let newInferenceMS { self.inferenceMS = newInferenceMS }
             if laneWasEvaluated {
@@ -131,23 +127,25 @@ final class FrameProcessor: ObservableObject {
         let candidates = detections.indices.filter { index in
             let box = detections[index].boundingBox
             let contactY = 1.0 - Double(box.minY)
-            guard let leftX = fittedLaneX(lane.leftPoints, at: contactY),
-                  let rightX = fittedLaneX(lane.rightPoints, at: contactY), rightX > leftX else { return false }
             let contactX = Double(box.midX)
-            let laneWidth = rightX - leftX
-            let laneCenter = (leftX + rightX) * 0.5
-            // Gate 1: tyre/contact point must be inside the detected ego lane.
-            guard contactX >= leftX && contactX <= rightX else { return false }
-            // Gate 2: forward reticle corridor. It follows the lane centre rather than
-            // raw screen centre, so a curved road still locks the correct lead vehicle.
-            // 62% of lane width is intentionally generous enough for a lead car near
-            // either lane marking, while rejecting adjacent-lane traffic.
-            let reticleHalfWidth = laneWidth * 0.31
-            guard abs(contactX - laneCenter) <= reticleHalfWidth else { return false }
-            // Ignore boxes whose contact point is implausibly high/low for a road target.
-            return contactY >= 0.34 && contactY <= 0.96
+
+            // Gate 1: vehicle contact point must belong to the detected physical ego lane.
+            guard let leftX = fittedLaneX(lane.leftPoints, at: contactY),
+                  let rightX = fittedLaneX(lane.rightPoints, at: contactY), rightX > leftX,
+                  contactX >= leftX, contactX <= rightX else { return false }
+
+            // Gate 2: fixed blue forward corridor requested for Ivy. The corridor is
+            // screen/camera referenced, not redrawn from lane geometry. It narrows with
+            // distance, matching the two thin blue guides visible on the HUD.
+            guard contactY >= 0.34 && contactY <= 0.96 else { return false }
+            let corridorTopY = 0.48
+            let corridorBottomY = 0.94
+            let t = max(0.0, min(1.0, (contactY - corridorTopY) / (corridorBottomY - corridorTopY)))
+            let halfWidth = 0.075 + (0.235 - 0.075) * t
+            guard abs(contactX - 0.50) <= halfWidth else { return false }
+            return true
         }
-        // Prefer the closest forward target when more than one car is aligned in ego lane.
+
         return candidates.max { lhs, rhs in
             let a = detections[lhs].boundingBox, b = detections[rhs].boundingBox
             let aScore = (1.0 - Double(a.minY)) + Double(a.width * a.height)
