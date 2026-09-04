@@ -19,18 +19,26 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
     private let speechSynthesizer = AVSpeechSynthesizer()
     private var lastDistanceAlertAt: TimeInterval = 0, lastLaneAlertAt: TimeInterval = 0
     private var lastOverspeedAlertAt: TimeInterval = 0, lastSpeechAt: TimeInterval = 0
+    private var lastLeadStartAlertAt: TimeInterval = 0
     private var lastSpokenKey = ""
     private var lastDistanceRisk: LeadDistanceRisk = .unavailable
     private var lastLaneState: LaneDepartureState = .unavailable
     private var lastTrafficSignUpdatedAt: TimeInterval = 0
     private var lastTrafficSign: TrafficSignKind?
 
+    // Lead Vehicle Start Alert state. It is intentionally independent from the
+    // >60 km/h following-distance warning gate because it operates while stopped.
+    private var stoppedLeadBaselineMeters: Double?
+    private var stoppedLeadArmedAt: TimeInterval = 0
+    private var stoppedLeadLastSeenAt: TimeInterval = 0
+    private var stoppedLeadMoveFrames = 0
+    private var wasStoppedWithLead = false
+
     override init() {
         super.init()
         UserDefaults.standard.register(defaults: [Self.volumeKey: 0.35, Self.vibrationKey: true, Self.audioModeKey: ADASAudioMode.allWarnings.rawValue])
         player = try? AVAudioPlayer(data: Self.makeBeepWAV())
         player?.delegate = self; player?.prepareToPlay(); speechSynthesizer.delegate = self
-        // Deliberately do not configure or activate AVAudioSession during init.
     }
 
     private var warningVolume: Float { Float(min(max(UserDefaults.standard.double(forKey: Self.volumeKey), 0), 1)) }
@@ -40,6 +48,8 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
     func update(distance: LeadDistanceState, lane: LaneDepartureState, trafficSign: TrafficSignState, vehicleSpeedKPH: Double) {
         announceNewTrafficSignIfNeeded(trafficSign)
         let now = ProcessInfo.processInfo.systemUptime
+
+        updateLeadVehicleStart(distance: distance.distanceMeters, vehicleSpeedKPH: vehicleSpeedKPH, now: now)
 
         let laneWarning = lane == .warningLeft || lane == .warningRight
         let previousLaneWarning = lastLaneState == .warningLeft || lastLaneState == .warningRight
@@ -62,6 +72,57 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
         if danger { alert(strong: true, message: "Cảnh báo, khoảng cách quá gần", key: "distance-danger"); lastDistanceAlertAt = now }
         else if caution { alert(strong: false, message: "Chú ý khoảng cách", key: "distance-caution"); lastDistanceAlertAt = now }
         lastDistanceRisk = distance.risk
+    }
+
+    private func updateLeadVehicleStart(distance: Double?, vehicleSpeedKPH: Double, now: TimeInterval) {
+        // GPS may jitter around zero. Treat <= 2 km/h as stopped.
+        let ownCarStopped = vehicleSpeedKPH <= 2.0
+        guard ownCarStopped else {
+            resetStoppedLead()
+            return
+        }
+
+        if let distance, distance >= 1.5, distance <= 35.0 {
+            stoppedLeadLastSeenAt = now
+            if stoppedLeadBaselineMeters == nil {
+                stoppedLeadBaselineMeters = distance
+                stoppedLeadArmedAt = now
+                stoppedLeadMoveFrames = 0
+                wasStoppedWithLead = true
+                return
+            }
+
+            // Let the tracker settle before judging movement. A departure is confirmed
+            // only after repeated frames and a meaningful increase in range.
+            if now - stoppedLeadArmedAt >= 1.2, let baseline = stoppedLeadBaselineMeters {
+                let movedAway = distance - baseline >= max(1.2, baseline * 0.10)
+                if movedAway { stoppedLeadMoveFrames += 1 } else { stoppedLeadMoveFrames = max(0, stoppedLeadMoveFrames - 1) }
+                if stoppedLeadMoveFrames >= 2 { fireLeadVehicleStart(now: now) }
+            }
+        } else if wasStoppedWithLead,
+                  stoppedLeadArmedAt > 0,
+                  now - stoppedLeadArmedAt >= 1.2,
+                  now - stoppedLeadLastSeenAt >= 0.55,
+                  now - stoppedLeadLastSeenAt <= 2.5 {
+            // A previously locked close lead disappearing upward/out of the fixed Ivy
+            // corridor while our own car remains stopped is also a strong start cue.
+            fireLeadVehicleStart(now: now)
+        }
+    }
+
+    private func fireLeadVehicleStart(now: TimeInterval) {
+        guard now - lastLeadStartAlertAt >= 5.0 else { return }
+        alert(strong: false, message: "Xe phía trước đã di chuyển", key: "lead-vehicle-start", forceSpeech: true)
+        lastLeadStartAlertAt = now
+        resetStoppedLead()
+    }
+
+    private func resetStoppedLead() {
+        stoppedLeadBaselineMeters = nil
+        stoppedLeadArmedAt = 0
+        stoppedLeadLastSeenAt = 0
+        stoppedLeadMoveFrames = 0
+        wasStoppedWithLead = false
     }
 
     private func announceNewTrafficSignIfNeeded(_ state: TrafficSignState) {
@@ -94,7 +155,6 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
 
     private func activateWarningAudio() {
         let session = AVAudioSession.sharedInstance()
-        // Mix only: Ivy must not duck/pause music, CarPlay or tweak audio sessions.
         try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
         try? session.setActive(true)
     }
