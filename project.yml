@@ -27,19 +27,22 @@ targets:
     info:
       path: xADAS-iOS/Info.plist
       properties:
+        CFBundleDisplayName: "Ivy"
+        CFBundleName: "Ivy"
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         SeventyMaiToken: "__SEVENTYMAI_TOKEN__"
         MapboxAccessToken: "__MAPBOX_TOKEN__"
-        NSCameraUsageDescription: "xADAS uses the camera for real-time driver-assistance vision processing."
-        NSLocalNetworkUsageDescription: "xADAS connects directly to your 70mai dashcam on its local Wi-Fi network to receive the RTSP video stream."
-        NSLocationWhenInUseUsageDescription: "xADAS uses GPS to estimate vehicle speed, match the current road and obtain map speed-limit data for driver-assistance warnings."
+        NSCameraUsageDescription: "Ivy uses the camera for real-time driver-assistance vision processing."
+        NSLocalNetworkUsageDescription: "Ivy connects directly to your 70mai dashcam on its local Wi-Fi network to receive the RTSP video stream."
+        NSLocationWhenInUseUsageDescription: "Ivy uses GPS for vehicle speed and driver-assistance logic."
         UIRequiresFullScreen: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
     settings:
       base:
+        PRODUCT_NAME: Ivy
         PRODUCT_BUNDLE_IDENTIFIER: com.hmtnvac.xadas
         MARKETING_VERSION: 1.0.0
         CURRENT_PROJECT_VERSION: 100
