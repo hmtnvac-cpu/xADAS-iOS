@@ -25,8 +25,6 @@ final class FrameProcessor: ObservableObject {
     private var lastPublishedAt = ProcessInfo.processInfo.systemUptime
     private var inferenceFrameCounter = 0
     private var laneFrameCounter = 1
-    private let inferenceStride = 1
-    private let laneStride = 2
     private var lastVehicleSeenAt: TimeInterval = 0
     private var lastLaneSeenAt: TimeInterval = 0
     private let detector: VehicleDetector?
@@ -37,10 +35,18 @@ final class FrameProcessor: ObservableObject {
     private var latestLaneDetection: LaneDetection?
 
     init() {
-        do { detector = try VehicleDetector(); detectorStatus = "VEHICLE MODEL READY" }
-        catch { detector = nil; detectorStatus = error.localizedDescription }
-        do { laneDetector = try LaneAIDetector(); laneStatus = "UFLD V2 LANE MODEL READY" }
-        catch { laneDetector = nil; laneStatus = error.localizedDescription }
+        do { detector = try VehicleDetector(); detectorStatus = "VEHICLE MODEL READY" } catch { detector = nil; detectorStatus = error.localizedDescription }
+        do { laneDetector = try LaneAIDetector(); laneStatus = "UFLD V2 LANE MODEL READY" } catch { laneDetector = nil; laneStatus = error.localizedDescription }
+    }
+
+    private var thermalStride: (vehicle: Int, lane: Int) {
+        switch ProcessInfo.processInfo.thermalState {
+        case .nominal: return (2, 3)
+        case .fair: return (3, 4)
+        case .serious: return (4, 6)
+        case .critical: return (6, 8)
+        @unknown default: return (3, 4)
+        }
     }
 
     func process(sampleBuffer: CMSampleBuffer) {
@@ -51,55 +57,41 @@ final class FrameProcessor: ObservableObject {
 
     func process(pixelBuffer: CVPixelBuffer, timestamp: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         totalFrames &+= 1; inferenceFrameCounter &+= 1; laneFrameCounter &+= 1
+        let stride = thermalStride
         let width = CVPixelBufferGetWidth(pixelBuffer), height = CVPixelBufferGetHeight(pixelBuffer)
         var newDetections: [VehicleDetection]?, newInferenceMS: Double?, newLeadState: LeadDistanceState?
         var newLaneDetection: LaneDetection?, laneWasEvaluated = false, newLaneState: LaneDepartureState?
 
-        if inferenceFrameCounter >= inferenceStride, let detector {
+        if inferenceFrameCounter >= stride.vehicle, let detector {
             inferenceFrameCounter = 0
-            do {
-                let result = try detector.detect(pixelBuffer: pixelBuffer)
-                newDetections = result.detections.map { $0.markingLead(false) }
-                newInferenceMS = result.inferenceMS
-            } catch {
-                let message = error.localizedDescription
-                DispatchQueue.main.async { [weak self] in self?.detectorStatus = "MODEL ERROR: \(message)" }
-            }
+            do { let result = try detector.detect(pixelBuffer: pixelBuffer); newDetections = result.detections.map { $0.markingLead(false) }; newInferenceMS = result.inferenceMS }
+            catch { let message = error.localizedDescription; DispatchQueue.main.async { [weak self] in self?.detectorStatus = "MODEL ERROR: \(message)" } }
         }
 
-        if laneFrameCounter >= laneStride, let laneDetector {
+        if laneFrameCounter >= stride.lane, let laneDetector {
             laneFrameCounter = 0; laneWasEvaluated = true
             do {
                 let lane = try laneDetector.detect(pixelBuffer: pixelBuffer)
-                if let lane {
-                    lastLaneSeenAt = ProcessInfo.processInfo.systemUptime; latestLaneDetection = lane
-                    newLaneDetection = lane; newLaneState = laneDepartureMonitor.update(with: lane)
-                } else if ProcessInfo.processInfo.systemUptime - lastLaneSeenAt > 0.7 {
-                    latestLaneDetection = nil; newLaneDetection = nil; newLaneState = laneDepartureMonitor.update(with: nil)
-                } else { laneWasEvaluated = false }
-            } catch {
-                newLaneDetection = nil; newLaneState = laneDepartureMonitor.update(with: nil)
-            }
+                if let lane { lastLaneSeenAt = ProcessInfo.processInfo.systemUptime; latestLaneDetection = lane; newLaneDetection = lane; newLaneState = laneDepartureMonitor.update(with: lane) }
+                else if ProcessInfo.processInfo.systemUptime - lastLaneSeenAt > 0.7 { latestLaneDetection = nil; newLaneDetection = nil; newLaneState = laneDepartureMonitor.update(with: nil) }
+                else { laneWasEvaluated = false }
+            } catch { newLaneDetection = nil; newLaneState = laneDepartureMonitor.update(with: nil) }
         }
 
         if var measured = newDetections {
             if let lane = latestLaneDetection, let leadIndex = leadVehicleIndex(in: measured, lane: lane) {
                 let leadBox = measured[leadIndex].boundingBox
-                let rawDistance = distanceEstimator.estimate(for: leadBox, frameWidth: width, frameHeight: height,
-                    horizontalFieldOfViewDegrees: horizontalFieldOfViewDegrees, effectiveFocalPixelsAt1920: effectiveFocalPixelsAt1920)
+                let rawDistance = distanceEstimator.estimate(for: leadBox, frameWidth: width, frameHeight: height, horizontalFieldOfViewDegrees: horizontalFieldOfViewDegrees, effectiveFocalPixelsAt1920: effectiveFocalPixelsAt1920)
                 let tracked = leadDistanceTracker.update(rawDistance: rawDistance, leadBox: leadBox, timestamp: timestamp)
-                measured[leadIndex] = measured[leadIndex].markingLead(true).withDistance(tracked.distanceMeters)
-                newLeadState = tracked; lastVehicleSeenAt = ProcessInfo.processInfo.systemUptime
-            } else if ProcessInfo.processInfo.systemUptime - lastVehicleSeenAt > 0.45 {
-                leadDistanceTracker.reset()
-                newLeadState = LeadDistanceState(distanceMeters: nil, closingSpeedMetersPerSecond: nil, risk: .unavailable)
+                measured[leadIndex] = measured[leadIndex].markingLead(true).withDistance(tracked.distanceMeters); newLeadState = tracked; lastVehicleSeenAt = ProcessInfo.processInfo.systemUptime
+            } else if ProcessInfo.processInfo.systemUptime - lastVehicleSeenAt > 0.55 {
+                leadDistanceTracker.reset(); newLeadState = LeadDistanceState(distanceMeters: nil, closingSpeedMetersPerSecond: nil, risk: .unavailable)
             }
-            measured = measured.filter { $0.isLead }
-            newDetections = measured
+            measured = measured.filter { $0.isLead }; newDetections = measured
         }
 
         let now = ProcessInfo.processInfo.systemUptime
-        let shouldPublishMetrics = now - lastPublishedAt >= 0.25
+        let shouldPublishMetrics = now - lastPublishedAt >= 0.5
         guard shouldPublishMetrics || newDetections != nil || laneWasEvaluated else { return }
         if shouldPublishMetrics { lastPublishedAt = now }
         let count = totalFrames
@@ -107,7 +99,7 @@ final class FrameProcessor: ObservableObject {
             guard let self else { return }
             if shouldPublishMetrics {
                 self.frameWidth = width; self.frameHeight = height; self.processedFrames = count
-                self.pipelineStatus = "FRAME PIPELINE ACTIVE • IVY EGO ROI"
+                self.pipelineStatus = ProcessInfo.processInfo.thermalState == .nominal ? "IVY AI • ECO ACTIVE" : "IVY AI • THERMAL ECO"
             }
             if let newDetections {
                 self.detections = newDetections
@@ -116,8 +108,7 @@ final class FrameProcessor: ObservableObject {
             }
             if let newInferenceMS { self.inferenceMS = newInferenceMS }
             if laneWasEvaluated {
-                self.laneDetection = newLaneDetection
-                if let newLaneState { self.laneDepartureState = newLaneState }
+                self.laneDetection = newLaneDetection; if let newLaneState { self.laneDepartureState = newLaneState }
                 self.laneStatus = newLaneDetection == nil ? "LANE SEARCHING" : "LANE ACTIVE • EGO LOCK"
             }
         }
@@ -125,32 +116,15 @@ final class FrameProcessor: ObservableObject {
 
     private func leadVehicleIndex(in detections: [VehicleDetection], lane: LaneDetection) -> Int? {
         let candidates = detections.indices.filter { index in
-            let box = detections[index].boundingBox
-            let contactY = 1.0 - Double(box.minY)
-            let contactX = Double(box.midX)
-
-            // Gate 1: vehicle contact point must belong to the detected physical ego lane.
-            guard let leftX = fittedLaneX(lane.leftPoints, at: contactY),
-                  let rightX = fittedLaneX(lane.rightPoints, at: contactY), rightX > leftX,
-                  contactX >= leftX, contactX <= rightX else { return false }
-
-            // Gate 2: fixed blue forward corridor requested for Ivy. The corridor is
-            // screen/camera referenced, not redrawn from lane geometry. It narrows with
-            // distance, matching the two thin blue guides visible on the HUD.
+            let box = detections[index].boundingBox; let contactY = 1.0 - Double(box.minY); let contactX = Double(box.midX)
+            guard let leftX = fittedLaneX(lane.leftPoints, at: contactY), let rightX = fittedLaneX(lane.rightPoints, at: contactY), rightX > leftX, contactX >= leftX, contactX <= rightX else { return false }
             guard contactY >= 0.34 && contactY <= 0.96 else { return false }
-            let corridorTopY = 0.48
-            let corridorBottomY = 0.94
-            let t = max(0.0, min(1.0, (contactY - corridorTopY) / (corridorBottomY - corridorTopY)))
-            let halfWidth = 0.075 + (0.235 - 0.075) * t
-            guard abs(contactX - 0.50) <= halfWidth else { return false }
-            return true
+            let t = max(0.0, min(1.0, (contactY - 0.48) / (0.94 - 0.48))); let halfWidth = 0.075 + (0.235 - 0.075) * t
+            return abs(contactX - 0.50) <= halfWidth
         }
-
         return candidates.max { lhs, rhs in
             let a = detections[lhs].boundingBox, b = detections[rhs].boundingBox
-            let aScore = (1.0 - Double(a.minY)) + Double(a.width * a.height)
-            let bScore = (1.0 - Double(b.minY)) + Double(b.width * b.height)
-            return aScore < bScore
+            return (1.0 - Double(a.minY)) + Double(a.width * a.height) < (1.0 - Double(b.minY)) + Double(b.width * b.height)
         }
     }
 
@@ -158,10 +132,8 @@ final class FrameProcessor: ObservableObject {
         guard points.count >= 6 else { return nil }
         let count = Double(points.count), sumY = points.reduce(0.0) { $0 + Double($1.y) }, sumX = points.reduce(0.0) { $0 + Double($1.x) }
         let sumYY = points.reduce(0.0) { $0 + Double($1.y * $1.y) }, sumYX = points.reduce(0.0) { $0 + Double($1.y * $1.x) }
-        let denominator = count * sumYY - sumY * sumY
-        guard abs(denominator) > 0.000_001 else { return nil }
-        let slope = (count * sumYX - sumY * sumX) / denominator, intercept = (sumX - slope * sumY) / count
-        let x = slope * y + intercept
+        let denominator = count * sumYY - sumY * sumY; guard abs(denominator) > 0.000_001 else { return nil }
+        let slope = (count * sumYX - sumY * sumX) / denominator, intercept = (sumX - slope * sumY) / count; let x = slope * y + intercept
         return x.isFinite ? x : nil
     }
 }
