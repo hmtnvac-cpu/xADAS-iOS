@@ -3,9 +3,23 @@ import AudioToolbox
 import Combine
 import Foundation
 
+enum ADASAudioMode: String, CaseIterable, Identifiable {
+    case beepOnly
+    case allWarnings
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .beepOnly: return "Chỉ tiếng bip"
+        case .allWarnings: return "Tất cả cảnh báo"
+        }
+    }
+}
+
 final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegate, AVSpeechSynthesizerDelegate {
     static let volumeKey = "xadas.warning.volume"
     static let vibrationKey = "xadas.warning.vibration"
+    static let audioModeKey = "xadas.warning.audioMode"
     static let minimumActiveSpeedKPH = 60.0
 
     private var player: AVAudioPlayer?
@@ -22,12 +36,11 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
 
     override init() {
         super.init()
-        if UserDefaults.standard.object(forKey: Self.volumeKey) == nil {
-            UserDefaults.standard.set(0.35, forKey: Self.volumeKey)
-        }
-        if UserDefaults.standard.object(forKey: Self.vibrationKey) == nil {
-            UserDefaults.standard.set(true, forKey: Self.vibrationKey)
-        }
+        UserDefaults.standard.register(defaults: [
+            Self.volumeKey: 0.35,
+            Self.vibrationKey: true,
+            Self.audioModeKey: ADASAudioMode.allWarnings.rawValue
+        ])
         player = try? AVAudioPlayer(data: Self.makeBeepWAV())
         player?.delegate = self
         player?.prepareToPlay()
@@ -42,8 +55,10 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
         UserDefaults.standard.bool(forKey: Self.vibrationKey)
     }
 
-    /// Sign announcements are allowed while stationary so recognition can be tested.
-    /// Lane/distance/overspeed driving warnings remain gated to >60 km/h as requested.
+    private var audioMode: ADASAudioMode {
+        ADASAudioMode(rawValue: UserDefaults.standard.string(forKey: Self.audioModeKey) ?? "") ?? .allWarnings
+    }
+
     func update(
         distance: LeadDistanceState,
         lane: LaneDepartureState,
@@ -63,11 +78,7 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
         if let limit = trafficSign.explicitSpeedLimitKPH,
            vehicleSpeedKPH >= Double(limit) + 5.0,
            now - lastOverspeedAlertAt >= 6.0 {
-            alert(
-                strong: true,
-                message: "Cảnh báo quá tốc độ. Giới hạn \(limit) ki lô mét một giờ",
-                key: "overspeed-\(limit)"
-            )
+            alert(strong: true, message: "Cảnh báo quá tốc độ. Giới hạn \(limit) ki lô mét một giờ", key: "overspeed-\(limit)")
             lastOverspeedAlertAt = now
         }
 
@@ -86,11 +97,9 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
             lastDistanceAlertAt = now
         } else if laneWarningDue {
             let isLeft = lane == .warningLeft
-            alert(
-                strong: false,
-                message: isLeft ? "Cảnh báo lệch làn trái" : "Cảnh báo lệch làn phải",
-                key: isLeft ? "lane-left" : "lane-right"
-            )
+            alert(strong: false,
+                  message: isLeft ? "Cảnh báo lệch làn trái" : "Cảnh báo lệch làn phải",
+                  key: isLeft ? "lane-left" : "lane-right")
             lastLaneAlertAt = now
         } else if distanceCautionDue {
             alert(strong: false, message: "Chú ý khoảng cách", key: "distance-caution")
@@ -111,30 +120,14 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
 
         switch sign {
         case .speedLimit(let value):
-            alert(
-                strong: false,
-                message: "Giới hạn tốc độ \(value) ki lô mét một giờ",
-                key: "sign-limit-\(value)",
-                forceSpeech: true
-            )
+            alert(strong: false, message: "Giới hạn tốc độ \(value) ki lô mét một giờ", key: "sign-limit-\(value)", forceSpeech: true)
         case .denseAreaStart:
-            alert(
-                strong: false,
-                message: "Bắt đầu khu đông dân cư",
-                key: "sign-dense-start",
-                forceSpeech: true
-            )
+            alert(strong: false, message: "Bắt đầu khu đông dân cư", key: "sign-dense-start", forceSpeech: true)
         case .denseAreaEnd:
-            alert(
-                strong: false,
-                message: "Hết khu đông dân cư",
-                key: "sign-dense-end",
-                forceSpeech: true
-            )
+            alert(strong: false, message: "Hết khu đông dân cư", key: "sign-dense-end", forceSpeech: true)
         }
     }
 
-    /// Settings test intentionally bypasses the >60 km/h gate.
     func testWarning() {
         alert(strong: true, message: "Hệ thống cảnh báo hoạt động", key: "test", forceSpeech: true)
     }
@@ -153,6 +146,8 @@ final class ADASWarningManager: NSObject, ObservableObject, AVAudioPlayerDelegat
         if vibrationEnabled {
             AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
         }
+
+        guard audioMode == .allWarnings else { return }
 
         let now = ProcessInfo.processInfo.systemUptime
         guard forceSpeech || key != lastSpokenKey || now - lastSpeechAt >= 5.0 else { return }
