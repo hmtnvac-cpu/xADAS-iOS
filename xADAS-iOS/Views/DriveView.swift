@@ -3,6 +3,7 @@ import SwiftUI
 struct DriveView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(CameraSource.selectionKey) private var cameraSourceRaw = CameraSourceChoice.seventyMai.rawValue
+    @AppStorage(ADASWarningManager.audioModeKey) private var audioModeRaw = ADASAudioMode.allWarnings.rawValue
     @State private var showCalibration = false
     @State private var showSettings = false
     @State private var rtspStatus = "70MAI STARTING"
@@ -16,6 +17,7 @@ struct DriveView: View {
     private let seventyMaiURL = CameraSource.seventyMaiURL
     private var selectedSource: CameraSourceChoice { CameraSourceChoice(rawValue: cameraSourceRaw) ?? .seventyMai }
     private var activeProcessor: FrameProcessor { selectedSource == .iPhone ? cameraManager.frameProcessor : frameProcessor }
+    private var audioMode: ADASAudioMode { ADASAudioMode(rawValue: audioModeRaw) ?? .allWarnings }
 
     var body: some View {
         ZStack {
@@ -55,6 +57,12 @@ struct DriveView: View {
             if showCalibration { CameraAlignmentOverlay(isPresented: $showCalibration) }
 
             VStack {
+                HStack {
+                    Spacer()
+                    speakerMenu
+                        .padding(.top, 58)
+                        .padding(.trailing, 18)
+                }
                 Spacer()
                 if selectedSource == .seventyMai, (frameProcessor.frameWidth == 0 || frameProcessor.frameHeight == 0) {
                     Button("RETRY 70MAI") {
@@ -85,6 +93,37 @@ struct DriveView: View {
         .onChange(of: activeProcessor.laneDepartureState) { value in updateWarnings(distance: activeProcessor.leadDistanceState, lane: value) }
         .onChange(of: vehicleSpeedMonitor.speedKPH) { _ in updateWarnings(distance: activeProcessor.leadDistanceState, lane: activeProcessor.laneDepartureState) }
         .persistentSystemOverlays(.hidden)
+    }
+
+    private var speakerMenu: some View {
+        Menu {
+            Button {
+                audioModeRaw = ADASAudioMode.beepOnly.rawValue
+            } label: {
+                if audioMode == .beepOnly {
+                    Label("Chỉ tiếng bip", systemImage: "checkmark")
+                } else {
+                    Text("Chỉ tiếng bip")
+                }
+            }
+
+            Button {
+                audioModeRaw = ADASAudioMode.allWarnings.rawValue
+            } label: {
+                if audioMode == .allWarnings {
+                    Label("Tất cả cảnh báo", systemImage: "checkmark")
+                } else {
+                    Text("Tất cả cảnh báo")
+                }
+            }
+        } label: {
+            Image(systemName: audioMode == .beepOnly ? "speaker.wave.1.fill" : "speaker.wave.3.fill")
+                .font(.system(size: 19, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 42, height: 42)
+                .background(.black.opacity(0.58), in: Circle())
+                .overlay(Circle().stroke(.white.opacity(0.55), lineWidth: 1))
+        }
     }
 
     private func updateWarnings(distance: LeadDistanceState, lane: LaneDepartureState) {
