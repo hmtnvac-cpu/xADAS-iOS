@@ -2,52 +2,32 @@ import Combine
 import CoreLocation
 import Foundation
 
-/// Uses a short GPS trace with Mapbox Map Matching and requests `maxspeed`
-/// annotations for the road segment currently occupied by the vehicle.
+/// Matches a short GPS trace to OpenStreetMap roads through Valhalla and reads
+/// the posted `edge.speed_limit` value. No API token or billing account required.
 final class MapSpeedLimitProvider: ObservableObject {
     @Published private(set) var speedLimitKPH: Int?
-    @Published private(set) var status = "MAP LIMIT • READY"
+    @Published private(set) var status = "OSM LIMIT • READY"
     @Published private(set) var lastUpdatedAt: Date?
 
     private var trace: [CLLocation] = []
     private var lastRequestAt: TimeInterval = 0
     private var task: URLSessionDataTask?
-
-    private let minimumRequestInterval: TimeInterval = 4.0
+    private let minimumRequestInterval: TimeInterval = 5.0
     private let maximumTracePoints = 8
-
-    private var token: String? {
-        guard let value = Bundle.main.object(forInfoDictionaryKey: "MapboxAccessToken") as? String else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed != "__MAPBOX_TOKEN__" else { return nil }
-        return trimmed
-    }
+    private let clientID = "ivy-adas-ios"
 
     func ingest(location: CLLocation) {
         guard location.horizontalAccuracy >= 0, location.horizontalAccuracy <= 35 else {
-            status = "MAP LIMIT • GPS WEAK"
+            status = "OSM LIMIT • GPS WEAK"
             return
         }
-
-        if let last = trace.last, location.distance(from: last) < 2.0 {
-            return
-        }
-
+        if let last = trace.last, location.distance(from: last) < 2.0 { return }
         trace.append(location)
-        if trace.count > maximumTracePoints {
-            trace.removeFirst(trace.count - maximumTracePoints)
-        }
-
+        if trace.count > maximumTracePoints { trace.removeFirst(trace.count - maximumTracePoints) }
         guard trace.count >= 3 else {
-            status = "MAP LIMIT • GPS TRACE"
+            status = "OSM LIMIT • GPS TRACE"
             return
         }
-
-        guard token != nil else {
-            status = "MAP LIMIT • NO TOKEN"
-            return
-        }
-
         let now = ProcessInfo.processInfo.systemUptime
         guard now - lastRequestAt >= minimumRequestInterval else { return }
         lastRequestAt = now
@@ -55,85 +35,66 @@ final class MapSpeedLimitProvider: ObservableObject {
     }
 
     private func requestMatch() {
-        guard let token else { return }
-        let points = trace.suffix(maximumTracePoints)
-        let coordinates = points.map {
-            String(format: "%.6f,%.6f", $0.coordinate.longitude, $0.coordinate.latitude)
-        }.joined(separator: ";")
-
-        var components = URLComponents(string: "https://api.mapbox.com/matching/v5/mapbox/driving/\(coordinates).json")
-        components?.queryItems = [
-            URLQueryItem(name: "annotations", value: "maxspeed"),
-            URLQueryItem(name: "overview", value: "full"),
-            URLQueryItem(name: "geometries", value: "geojson"),
-            URLQueryItem(name: "access_token", value: token)
-        ]
-        guard let url = components?.url else {
-            status = "MAP LIMIT • URL ERROR"
+        let points = trace.suffix(maximumTracePoints).map {
+            ValhallaTraceRequest.Point(lat: $0.coordinate.latitude, lon: $0.coordinate.longitude, time: Int($0.timestamp.timeIntervalSince1970))
+        }
+        let payload = ValhallaTraceRequest(
+            shape: points,
+            costing: "auto",
+            shape_match: "map_snap",
+            filters: .init(action: "include", attributes: ["edge.speed_limit", "edge.speed", "edge.osm_id"])
+        )
+        guard let url = URL(string: "https://valhalla1.openstreetmap.de/trace_attributes"),
+              let body = try? JSONEncoder().encode(payload) else {
+            status = "OSM LIMIT • URL ERROR"
             return
         }
 
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpBody = body
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(clientID, forHTTPHeaderField: "X-Client-Id")
+        request.setValue("IvyADAS/1.0 (iOS; personal navigation project)", forHTTPHeaderField: "User-Agent")
+
         task?.cancel()
-        status = "MAP LIMIT • MATCHING"
-        task = URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
+        status = "OSM LIMIT • MATCHING"
+        task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let self else { return }
-            if let error {
-                DispatchQueue.main.async { self.status = "MAP LIMIT • NET \(error.localizedDescription)" }
+            guard error == nil, let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode), let data else {
+                DispatchQueue.main.async { self.status = "OSM LIMIT • NET ERROR" }
                 return
             }
-            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode), let data else {
-                DispatchQueue.main.async { self.status = "MAP LIMIT • HTTP ERROR" }
-                return
-            }
-
             do {
-                let decoded = try JSONDecoder().decode(MapMatchingResponse.self, from: data)
-                let values = decoded.matchings
-                    .flatMap(\.legs)
-                    .compactMap(\.annotation)
-                    .flatMap(\.maxspeed)
-                    .compactMap(Self.kph(from:))
-
+                let decoded = try JSONDecoder().decode(ValhallaTraceResponse.self, from: data)
+                let limit = decoded.edges.reversed().compactMap(\.speed_limit).first.flatMap { $0 > 0 && $0 < 200 ? $0 : nil }
                 DispatchQueue.main.async {
-                    self.speedLimitKPH = values.last
+                    self.speedLimitKPH = limit
                     self.lastUpdatedAt = Date()
-                    self.status = values.last.map { "MAP LIMIT • \($0)" } ?? "MAP LIMIT • UNKNOWN"
+                    self.status = limit.map { "OSM LIMIT • \($0)" } ?? "OSM LIMIT • UNKNOWN"
                 }
             } catch {
-                DispatchQueue.main.async { self.status = "MAP LIMIT • PARSE ERROR" }
+                DispatchQueue.main.async { self.status = "OSM LIMIT • PARSE ERROR" }
             }
         }
         task?.resume()
     }
-
-    private static func kph(from maxspeed: MapMatchingResponse.MaxSpeed) -> Int? {
-        guard let speed = maxspeed.speed, let unit = maxspeed.unit else { return nil }
-        if unit.lowercased() == "mph" {
-            return Int((Double(speed) * 1.609344).rounded())
-        }
-        return speed
-    }
 }
 
-private struct MapMatchingResponse: Decodable {
-    let matchings: [Matching]
+private struct ValhallaTraceRequest: Encodable {
+    struct Point: Encodable { let lat: Double; let lon: Double; let time: Int }
+    struct Filters: Encodable { let action: String; let attributes: [String] }
+    let shape: [Point]
+    let costing: String
+    let shape_match: String
+    let filters: Filters
+}
 
-    struct Matching: Decodable {
-        let legs: [Leg]
-    }
-
-    struct Leg: Decodable {
-        let annotation: Annotation?
-    }
-
-    struct Annotation: Decodable {
-        let maxspeed: [MaxSpeed]
-    }
-
-    struct MaxSpeed: Decodable {
+private struct ValhallaTraceResponse: Decodable {
+    struct Edge: Decodable {
+        let speed_limit: Int?
         let speed: Int?
-        let unit: String?
-        let unknown: Bool?
-        let none: Bool?
+        let osm_id: Int64?
     }
+    let edges: [Edge]
 }
