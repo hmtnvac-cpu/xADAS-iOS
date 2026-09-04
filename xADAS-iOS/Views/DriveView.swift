@@ -11,6 +11,7 @@ struct DriveView: View {
     @State private var useVLCFallback = false
     @State private var configuredSourceRaw: String?
     @State private var didInitialConfigure = false
+    @State private var visionSuspended = false
     @StateObject private var frameProcessor = FrameProcessor()
     @StateObject private var cameraManager = CameraManager()
     @StateObject private var warningManager = ADASWarningManager()
@@ -24,63 +25,100 @@ struct DriveView: View {
     var body: some View {
         ZStack {
             Group {
-                if selectedSource == .iPhone { CameraPreview(session: cameraManager.session) }
-                else if useVLCFallback { SeventyMaiPlayerView(urlString: seventyMaiURL, restartToken: restartToken, frameProcessor: frameProcessor, statusText: $rtspStatus) }
-                else { RootlessSeventyMaiPlayerView(urlString: seventyMaiURL, restartToken: restartToken, frameProcessor: frameProcessor, statusText: $rtspStatus) }
+                if visionSuspended {
+                    Color.black
+                } else if selectedSource == .iPhone {
+                    CameraPreview(session: cameraManager.session)
+                } else if useVLCFallback {
+                    SeventyMaiPlayerView(urlString: seventyMaiURL, restartToken: restartToken, frameProcessor: frameProcessor, statusText: $rtspStatus)
+                } else {
+                    RootlessSeventyMaiPlayerView(urlString: seventyMaiURL, restartToken: restartToken, frameProcessor: frameProcessor, statusText: $rtspStatus)
+                }
             }.ignoresSafeArea()
 
-            ADASOverlayView(
-                isCameraRunning: activeProcessor.frameWidth > 0 && activeProcessor.frameHeight > 0,
-                cameraName: selectedSource == .iPhone ? "iPhone" : "70mai",
-                fps: selectedSource == .iPhone ? cameraManager.fps : (frameProcessor.frameWidth > 0 ? 4.5 : 0),
-                pipelineStatus: selectedSource == .iPhone ? "IPHONE CAMERA ACTIVE" : rtspStatus,
-                detectorStatus: activeProcessor.detectorStatus, inferenceMS: activeProcessor.inferenceMS,
-                frameWidth: activeProcessor.frameWidth, frameHeight: activeProcessor.frameHeight,
-                detections: activeProcessor.detections, leadDistanceState: activeProcessor.leadDistanceState,
-                horizonRatio: UserDefaults.standard.double(forKey: DistanceEstimator.horizonRatioKey),
-                laneDetection: activeProcessor.laneDetection, laneStatus: activeProcessor.laneStatus,
-                laneDepartureState: activeProcessor.laneDepartureState, trafficSignState: activeProcessor.trafficSignState,
-                trafficSignStatus: activeProcessor.trafficSignStatus, mapSpeedLimitKPH: nil, cameraSpeedLimitKPH: nil,
-                mapStatus: "SIGN/MAP PAUSED", vehicleSpeedKPH: vehicleSpeedMonitor.speedKPH
-            )
+            if !visionSuspended {
+                ADASOverlayView(
+                    isCameraRunning: activeProcessor.frameWidth > 0 && activeProcessor.frameHeight > 0,
+                    cameraName: selectedSource == .iPhone ? "iPhone" : "70mai",
+                    fps: selectedSource == .iPhone ? cameraManager.fps : (frameProcessor.frameWidth > 0 ? 4.5 : 0),
+                    pipelineStatus: selectedSource == .iPhone ? "IPHONE CAMERA ACTIVE" : rtspStatus,
+                    detectorStatus: activeProcessor.detectorStatus, inferenceMS: activeProcessor.inferenceMS,
+                    frameWidth: activeProcessor.frameWidth, frameHeight: activeProcessor.frameHeight,
+                    detections: activeProcessor.detections, leadDistanceState: activeProcessor.leadDistanceState,
+                    horizonRatio: UserDefaults.standard.double(forKey: DistanceEstimator.horizonRatioKey),
+                    laneDetection: activeProcessor.laneDetection, laneStatus: activeProcessor.laneStatus,
+                    laneDepartureState: activeProcessor.laneDepartureState, trafficSignState: activeProcessor.trafficSignState,
+                    trafficSignStatus: activeProcessor.trafficSignStatus, mapSpeedLimitKPH: nil, cameraSpeedLimitKPH: nil,
+                    mapStatus: "SIGN/MAP PAUSED", vehicleSpeedKPH: vehicleSpeedMonitor.speedKPH
+                )
+            }
 
             if showCalibration { CameraAlignmentOverlay(isPresented: $showCalibration) }
             VStack {
                 HStack { Spacer(); speakerMenu.padding(.top, 58).padding(.trailing, 18) }
                 Spacer()
-                if selectedSource == .seventyMai, (frameProcessor.frameWidth == 0 || frameProcessor.frameHeight == 0) {
+                if !visionSuspended, selectedSource == .seventyMai, (frameProcessor.frameWidth == 0 || frameProcessor.frameHeight == 0) {
                     Button("RETRY 70MAI") { rtspStatus = "70MAI RETRYING"; useVLCFallback = false; restartToken = UUID(); scheduleNativeFallbackCheck(for: restartToken) }
                         .buttonStyle(ADASButtonStyle()).padding(.bottom, 70)
                 }
             }.foregroundStyle(.white)
         }
         .overlay(alignment: .bottom) {
-            if !showCalibration {
+            if !showCalibration && !visionSuspended {
                 HStack(spacing: 16) { Button("CALIBRATE") { showCalibration = true }; Button("SETTING") { showSettings = true } }
                     .buttonStyle(ADASButtonStyle()).padding(.bottom, 22)
             }
         }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .onAppear {
+            visionSuspended = false
             vehicleSpeedMonitor.start()
             if !didInitialConfigure { didInitialConfigure = true; configureSelectedSource(force: true) }
             updateWarnings(distance: activeProcessor.leadDistanceState, lane: activeProcessor.laneDepartureState)
         }
         .onChange(of: cameraSourceRaw) { _ in configureSelectedSource(force: true) }
         .onChange(of: scenePhase) { phase in
-            if phase == .active {
+            switch phase {
+            case .active:
+                visionSuspended = false
                 vehicleSpeedMonitor.start()
-                // Returning from Settings/control center must not tear down/restart RTSP.
                 if configuredSourceRaw != cameraSourceRaw { configureSelectedSource(force: true) }
                 else if selectedSource == .iPhone && !cameraManager.isRunning { cameraManager.start() }
-            } else if phase == .background {
+                else if selectedSource == .seventyMai {
+                    // Recreate the player only after a genuine background suspension.
+                    rtspStatus = "70MAI RESUMING"
+                    restartToken = UUID()
+                    scheduleNativeFallbackCheck(for: restartToken)
+                }
+            case .background:
+                // Ivy is a foreground ADAS app. Do no camera/RTSP/AI work while hidden:
+                // this releases shared resources, reduces heat and avoids tweak conflicts.
+                visionSuspended = true
                 vehicleSpeedMonitor.stop()
-                if selectedSource == .iPhone { cameraManager.stop() }
+                cameraManager.stop()
+                useVLCFallback = false
+                rtspStatus = "IVY SUSPENDED"
+                restartToken = UUID()
+            case .inactive:
+                // Control Center / transient interruptions must not repeatedly tear down
+                // the active pipeline; only true background performs the heavy cleanup.
+                break
+            @unknown default:
+                break
             }
         }
-        .onChange(of: activeProcessor.leadDistanceState) { value in updateWarnings(distance: value, lane: activeProcessor.laneDepartureState) }
-        .onChange(of: activeProcessor.laneDepartureState) { value in updateWarnings(distance: activeProcessor.leadDistanceState, lane: value) }
-        .onChange(of: vehicleSpeedMonitor.speedKPH) { _ in updateWarnings(distance: activeProcessor.leadDistanceState, lane: activeProcessor.laneDepartureState) }
+        .onChange(of: activeProcessor.leadDistanceState) { value in
+            guard !visionSuspended else { return }
+            updateWarnings(distance: value, lane: activeProcessor.laneDepartureState)
+        }
+        .onChange(of: activeProcessor.laneDepartureState) { value in
+            guard !visionSuspended else { return }
+            updateWarnings(distance: activeProcessor.leadDistanceState, lane: value)
+        }
+        .onChange(of: vehicleSpeedMonitor.speedKPH) { _ in
+            guard !visionSuspended else { return }
+            updateWarnings(distance: activeProcessor.leadDistanceState, lane: activeProcessor.laneDepartureState)
+        }
         .persistentSystemOverlays(.hidden)
     }
 
@@ -117,7 +155,7 @@ struct DriveView: View {
 
     private func scheduleNativeFallbackCheck(for token: UUID) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
-            guard selectedSource == .seventyMai, restartToken == token, !useVLCFallback,
+            guard !visionSuspended, selectedSource == .seventyMai, restartToken == token, !useVLCFallback,
                   frameProcessor.frameWidth == 0 || frameProcessor.frameHeight == 0 else { return }
             rtspStatus = "70MAI VLC FALLBACK"; useVLCFallback = true
         }
