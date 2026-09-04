@@ -24,7 +24,7 @@ struct IvySearchResult: Identifiable, Equatable {
 
 final class MapNavigationProvider: ObservableObject {
     @Published private(set) var summary: IvyNavigationSummary?
-    @Published private(set) var status = "NAV • READY"
+    @Published private(set) var status = "NAV • OSM READY"
     @Published private(set) var searchResults: [IvySearchResult] = []
     @Published private(set) var destinationCoordinate: CLLocationCoordinate2D?
     @Published private(set) var destinationName: String?
@@ -34,13 +34,8 @@ final class MapNavigationProvider: ObservableObject {
     private var routeTask: URLSessionDataTask?
     private var searchTask: URLSessionDataTask?
     private let minimumRouteRefreshInterval: TimeInterval = 8
-
-    private var token: String? {
-        guard let value = Bundle.main.object(forInfoDictionaryKey: "MapboxAccessToken") as? String else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed != "__MAPBOX_TOKEN__" else { return nil }
-        return trimmed
-    }
+    private let userAgent = "IvyADAS/1.0 (iOS; personal navigation project)"
+    private let clientID = "ivy-adas-ios"
 
     var isNavigating: Bool { destinationCoordinate != nil }
 
@@ -53,55 +48,53 @@ final class MapNavigationProvider: ObservableObject {
         requestRoute()
     }
 
+    // Deliberately invoked only by an explicit Search/Return action in the UI.
+    // Public Nominatim forbids client-side autocomplete.
     func search(query: String) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 2 else {
             searchTask?.cancel()
             searchResults = []
-            return
-        }
-        guard let token else {
-            status = "NAV • NO TOKEN"
+            status = "NAV • OSM READY"
             return
         }
 
-        var components = URLComponents(string: "https://api.mapbox.com/search/geocode/v6/forward")
-        var items = [
+        var components = URLComponents(string: "https://nominatim.openstreetmap.org/search")
+        components?.queryItems = [
             URLQueryItem(name: "q", value: trimmed),
+            URLQueryItem(name: "format", value: "jsonv2"),
+            URLQueryItem(name: "addressdetails", value: "1"),
             URLQueryItem(name: "limit", value: "6"),
-            URLQueryItem(name: "language", value: "vi"),
-            URLQueryItem(name: "country", value: "vn"),
-            URLQueryItem(name: "access_token", value: token)
+            URLQueryItem(name: "countrycodes", value: "vn"),
+            URLQueryItem(name: "accept-language", value: "vi")
         ]
-        if let location = latestLocation {
-            items.append(URLQueryItem(name: "proximity", value: "\(location.coordinate.longitude),\(location.coordinate.latitude)"))
-        }
-        components?.queryItems = items
         guard let url = components?.url else { return }
 
         searchTask?.cancel()
-        status = "NAV • SEARCHING"
-        searchTask = URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
+        status = "NAV • SEARCHING OSM"
+        var request = URLRequest(url: url)
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("vi", forHTTPHeaderField: "Accept-Language")
+
+        searchTask = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let self else { return }
             guard error == nil, let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode), let data else {
                 DispatchQueue.main.async { self.status = "NAV • SEARCH ERROR" }
                 return
             }
             do {
-                let decoded = try JSONDecoder().decode(GeocodeResponse.self, from: data)
-                let results = decoded.features.compactMap { feature -> IvySearchResult? in
-                    guard feature.geometry.coordinates.count >= 2 else { return nil }
-                    let coordinate = CLLocationCoordinate2D(latitude: feature.geometry.coordinates[1], longitude: feature.geometry.coordinates[0])
-                    let title = feature.properties.name ?? feature.properties.full_address ?? "Điểm đến"
-                    let subtitle = feature.properties.full_address ?? feature.properties.place_formatted ?? ""
-                    return IvySearchResult(name: title, subtitle: subtitle, coordinate: coordinate)
+                let decoded = try JSONDecoder().decode([NominatimResult].self, from: data)
+                let results = decoded.compactMap { item -> IvySearchResult? in
+                    guard let lat = Double(item.lat), let lon = Double(item.lon) else { return nil }
+                    let title = item.name?.isEmpty == false ? item.name! : item.display_name.components(separatedBy: ",").first ?? "Điểm đến"
+                    return IvySearchResult(name: title, subtitle: item.display_name, coordinate: .init(latitude: lat, longitude: lon))
                 }
                 DispatchQueue.main.async {
                     self.searchResults = results
-                    self.status = results.isEmpty ? "NAV • NO RESULT" : "NAV • RESULTS"
+                    self.status = results.isEmpty ? "NAV • NO RESULT" : "NAV • OSM RESULTS"
                 }
             } catch {
-                DispatchQueue.main.async { self.status = "NAV • PARSE ERROR" }
+                DispatchQueue.main.async { self.status = "NAV • SEARCH PARSE ERROR" }
             }
         }
         searchTask?.resume()
@@ -120,97 +113,98 @@ final class MapNavigationProvider: ObservableObject {
         destinationCoordinate = nil
         destinationName = nil
         summary = nil
-        status = "NAV • READY"
+        status = "NAV • OSM READY"
     }
 
     private func requestRoute() {
-        guard let token, let origin = latestLocation?.coordinate, let destination = destinationCoordinate else {
-            if token == nil { status = "NAV • NO TOKEN" }
+        guard let origin = latestLocation?.coordinate, let destination = destinationCoordinate else {
+            status = "NAV • WAIT GPS"
             return
         }
 
-        let coords = "\(origin.longitude),\(origin.latitude);\(destination.longitude),\(destination.latitude)"
-        var components = URLComponents(string: "https://api.mapbox.com/directions/v5/mapbox/driving-traffic/\(coords)")
-        components?.queryItems = [
-            URLQueryItem(name: "steps", value: "true"),
-            URLQueryItem(name: "banner_instructions", value: "true"),
-            URLQueryItem(name: "language", value: "vi"),
-            URLQueryItem(name: "overview", value: "false"),
-            URLQueryItem(name: "alternatives", value: "false"),
-            URLQueryItem(name: "access_token", value: token)
-        ]
-        guard let url = components?.url else { return }
+        let payload = ValhallaRouteRequest(
+            locations: [
+                .init(lat: origin.latitude, lon: origin.longitude),
+                .init(lat: destination.latitude, lon: destination.longitude)
+            ],
+            costing: "auto",
+            units: "kilometers",
+            language: "vi-VN"
+        )
+        guard let url = URL(string: "https://valhalla1.openstreetmap.de/route"),
+              let body = try? JSONEncoder().encode(payload) else { return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpBody = body
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(clientID, forHTTPHeaderField: "X-Client-Id")
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
 
         routeTask?.cancel()
-        status = "NAV • ROUTING"
-        routeTask = URLSession.shared.dataTask(with: url) { [weak self] data, response, error in
+        status = "NAV • ROUTING OSM"
+        routeTask = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let self else { return }
             guard error == nil, let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode), let data else {
                 DispatchQueue.main.async { self.status = "NAV • ROUTE ERROR" }
                 return
             }
             do {
-                let decoded = try JSONDecoder().decode(DirectionsResponse.self, from: data)
-                guard let route = decoded.routes.first,
-                      let leg = route.legs.first,
-                      let step = leg.steps.first(where: { $0.maneuver.type != "depart" }) ?? leg.steps.first else {
+                let decoded = try JSONDecoder().decode(ValhallaRouteResponse.self, from: data)
+                guard let leg = decoded.trip.legs.first,
+                      let maneuver = leg.maneuvers.first(where: { $0.type != 1 }) ?? leg.maneuvers.first else {
                     DispatchQueue.main.async { self.status = "NAV • NO ROUTE" }
                     return
                 }
                 let summary = IvyNavigationSummary(
-                    instruction: step.maneuver.instruction,
-                    modifier: step.maneuver.modifier,
-                    maneuverDistanceMeters: step.distance,
-                    remainingDistanceMeters: route.distance,
-                    remainingDurationSeconds: route.duration,
+                    instruction: maneuver.instruction,
+                    modifier: nil,
+                    maneuverDistanceMeters: maneuver.length * 1000,
+                    remainingDistanceMeters: decoded.trip.summary.length * 1000,
+                    remainingDurationSeconds: decoded.trip.summary.time,
                     destinationName: self.destinationName ?? "Điểm đến"
                 )
                 DispatchQueue.main.async {
                     self.summary = summary
-                    self.status = "NAV • ACTIVE"
+                    self.status = "NAV • ACTIVE OSM"
                 }
             } catch {
-                DispatchQueue.main.async { self.status = "NAV • PARSE ERROR" }
+                DispatchQueue.main.async { self.status = "NAV • ROUTE PARSE ERROR" }
             }
         }
         routeTask?.resume()
     }
 }
 
-private struct GeocodeResponse: Decodable {
-    let features: [Feature]
-    struct Feature: Decodable {
-        let properties: Properties
-        let geometry: Geometry
-    }
-    struct Properties: Decodable {
-        let name: String?
-        let full_address: String?
-        let place_formatted: String?
-    }
-    struct Geometry: Decodable {
-        let coordinates: [Double]
-    }
+private struct NominatimResult: Decodable {
+    let lat: String
+    let lon: String
+    let display_name: String
+    let name: String?
 }
 
-private struct DirectionsResponse: Decodable {
-    let routes: [Route]
-    struct Route: Decodable {
-        let distance: Double
-        let duration: Double
+private struct ValhallaRouteRequest: Encodable {
+    struct Point: Encodable { let lat: Double; let lon: Double }
+    let locations: [Point]
+    let costing: String
+    let units: String
+    let language: String
+}
+
+private struct ValhallaRouteResponse: Decodable {
+    let trip: Trip
+    struct Trip: Decodable {
+        let summary: Summary
         let legs: [Leg]
     }
-    struct Leg: Decodable {
-        let steps: [Step]
+    struct Summary: Decodable {
+        let time: Double
+        let length: Double
     }
-    struct Step: Decodable {
-        let distance: Double
-        let duration: Double
-        let maneuver: Maneuver
-    }
+    struct Leg: Decodable { let maneuvers: [Maneuver] }
     struct Maneuver: Decodable {
+        let type: Int
         let instruction: String
-        let modifier: String?
-        let type: String
+        let length: Double
     }
 }
