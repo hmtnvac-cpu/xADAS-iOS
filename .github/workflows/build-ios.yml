@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - "xADAS-iOS/**"
+      - "IvyShareExtension/**"
       - "project.yml"
       - "scripts/download-model.sh"
       - "scripts/download-lane-model.sh"
@@ -44,7 +45,7 @@ jobs:
       - name: Inject runtime API keys
         env:
           SEVENTYMAI_TOKEN: ${{ secrets.SEVENTYMAI_TOKEN || secrets.A500S_TOKEN || secrets.TOKEN_70MAI || secrets['70MAI_TOKEN'] }}
-          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+          GRAPHHOPPER_API_KEY: ${{ secrets.GRAPHHOPPER_API_KEY }}
         run: |
           set -euo pipefail
           if [ -n "${SEVENTYMAI_TOKEN:-}" ]; then
@@ -52,16 +53,17 @@ jobs:
           else
             echo "70mai token secret is not configured; RTSP fallback remains available."
           fi
-          if [ -n "${GOOGLE_MAPS_API_KEY:-}" ]; then
-            /usr/libexec/PlistBuddy -c "Set :GoogleMapsAPIKey $GOOGLE_MAPS_API_KEY" xADAS-iOS/Info.plist
-          else
-            echo "GOOGLE_MAPS_API_KEY is not configured; Ivy will build but Google Navigation stays disabled."
+          if [ -z "${GRAPHHOPPER_API_KEY:-}" ]; then
+            echo "GRAPHHOPPER_API_KEY secret is required for Ivy navigation." >&2
+            exit 1
           fi
+          /usr/libexec/PlistBuddy -c "Set :GraphHopperAPIKey $GRAPHHOPPER_API_KEY" xADAS-iOS/Info.plist
       - name: Verify navigation configuration
         run: |
           set -euo pipefail
+          grep -R "graphhopper.com/api/1/route" xADAS-iOS/ADAS
           grep -R "openstreetmap.de\|openstreetmap.org" xADAS-iOS/ADAS xADAS-iOS/Views
-          grep -q "ios-navigation-sdk" project.yml
+          ! grep -R "ios-navigation-sdk\|GoogleMapsAPIKey\|__GOOGLE_MAPS_API_KEY__" project.yml xADAS-iOS IvyShareExtension
       - name: Verify deployment target before build
         run: |
           set -euo pipefail
@@ -78,11 +80,16 @@ jobs:
           APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/Ivy.app"
           INFO="$APP_PATH/Info.plist"
           BIN="$APP_PATH/Ivy"
+          SHARE="$APP_PATH/PlugIns/IvyShareExtension.appex"
           test -d "$APP_PATH" && test -f "$INFO" && test -f "$BIN"
           test -d "$APP_PATH/YOLOv3TinyInt8LUT.mlmodelc"
           test -f "$APP_PATH/UFLDv2TuSimpleRes18Int8.onnx"
+          test -d "$SHARE"
           test "$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$INFO")" = "16.0"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$INFO")" = "Ivy"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0' "$INFO")" = "ivy"
+          KEY=$(/usr/libexec/PlistBuddy -c 'Print :GraphHopperAPIKey' "$INFO")
+          test -n "$KEY" && test "$KEY" != "__GRAPHHOPPER_API_KEY__"
           xcrun vtool -show-build "$BIN"
       - name: Package unsigned Ivy IPA
         run: |
