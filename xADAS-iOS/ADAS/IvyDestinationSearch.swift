@@ -22,6 +22,7 @@ final class IvyDestinationSearch: NSObject, ObservableObject, MKLocalSearchCompl
     private let audioEngine = AVAudioEngine()
     private var speechRequest: SFSpeechAudioBufferRecognitionRequest?
     private var speechTask: SFSpeechRecognitionTask?
+    private var tapInstalled = false
 
     override init() {
         super.init()
@@ -65,7 +66,10 @@ final class IvyDestinationSearch: NSObject, ObservableObject, MKLocalSearchCompl
         speechError = nil
         SFSpeechRecognizer.requestAuthorization { [weak self] status in
             DispatchQueue.main.async {
-                guard status == .authorized else { self?.speechError = "Chưa cấp quyền nhận dạng giọng nói"; return }
+                guard status == .authorized else {
+                    self?.speechError = status == .denied ? "Quyền nhận dạng giọng nói đang bị tắt" : "Chưa cấp quyền nhận dạng giọng nói"
+                    return
+                }
                 self?.requestMicrophoneAndStart(onText: onText)
             }
         }
@@ -74,7 +78,7 @@ final class IvyDestinationSearch: NSObject, ObservableObject, MKLocalSearchCompl
     private func requestMicrophoneAndStart(onText: @escaping (String) -> Void) {
         AVAudioSession.sharedInstance().requestRecordPermission { [weak self] granted in
             DispatchQueue.main.async {
-                guard granted else { self?.speechError = "Chưa cấp quyền micro"; return }
+                guard granted else { self?.speechError = "Quyền micro đang bị tắt"; return }
                 self?.startVoice(onText: onText)
             }
         }
@@ -85,17 +89,28 @@ final class IvyDestinationSearch: NSObject, ObservableObject, MKLocalSearchCompl
         guard let recognizer, recognizer.isAvailable else { speechError = "Nhận dạng giọng nói chưa sẵn sàng"; return }
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.record, mode: .measurement, options: [.mixWithOthers])
+            try session.setCategory(.playAndRecord, mode: .measurement, options: [.mixWithOthers, .allowBluetooth])
             try session.setActive(true)
+
             let request = SFSpeechAudioBufferRecognitionRequest()
             request.shouldReportPartialResults = true
             speechRequest = request
+
             let input = audioEngine.inputNode
             let format = input.outputFormat(forBus: 0)
-            input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in request.append(buffer) }
+            guard format.sampleRate > 0, format.channelCount > 0 else {
+                speechError = "Micro chưa sẵn sàng"
+                stopVoice()
+                return
+            }
+            input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+                request.append(buffer)
+            }
+            tapInstalled = true
             audioEngine.prepare()
             try audioEngine.start()
             isListening = true
+
             speechTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
                 DispatchQueue.main.async {
                     if let text = result?.bestTranscription.formattedString, !text.isEmpty { onText(text) }
@@ -109,8 +124,15 @@ final class IvyDestinationSearch: NSObject, ObservableObject, MKLocalSearchCompl
     }
 
     func stopVoice() {
-        if audioEngine.isRunning { audioEngine.stop(); audioEngine.inputNode.removeTap(onBus: 0) }
-        speechRequest?.endAudio(); speechTask?.cancel(); speechRequest = nil; speechTask = nil
+        if audioEngine.isRunning { audioEngine.stop() }
+        if tapInstalled {
+            audioEngine.inputNode.removeTap(onBus: 0)
+            tapInstalled = false
+        }
+        speechRequest?.endAudio()
+        speechTask?.cancel()
+        speechRequest = nil
+        speechTask = nil
         isListening = false
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }
