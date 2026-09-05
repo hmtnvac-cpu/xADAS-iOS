@@ -35,13 +35,12 @@ final class MapNavigationProvider: ObservableObject {
     private var lastRerouteAt: TimeInterval = 0
     private var usingGraphHopperRoute = false
     private var graphHopperPoints: [CLLocationCoordinate2D] = []
-    private var graphHopperInstructions: [GraphHopperRouteResponse.Instruction] = []
+    private var graphHopperInstructions: [GraphHopperRouteResponse.Path.Instruction] = []
     private var graphHopperRouteDistance: Double = 0
     private var graphHopperRouteTime: Double = 0
     private let minimumRerouteInterval: TimeInterval = 15
     private let offRouteDistanceMeters: CLLocationDistance = 80
     private let userAgent = "IvyADAS/1.0 (iOS; personal navigation project)"
-    private let clientID = "ivy-adas-ios"
 
     private var graphHopperAPIKey: String? {
         guard let key = Bundle.main.object(forInfoDictionaryKey: "GraphHopperAPIKey") as? String, !key.isEmpty, !key.hasPrefix("__") else { return nil }
