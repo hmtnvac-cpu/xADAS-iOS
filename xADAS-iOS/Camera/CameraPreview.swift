@@ -27,16 +27,21 @@ final class PreviewView: UIView {
         layer as! AVCaptureVideoPreviewLayer
     }
 
-    func applyLandscapeOrientation() {
-        guard let connection = videoPreviewLayer.connection else { return }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        // The preview connection can become available only after the capture session
+        // has started. Re-apply the exact same orientation used by CameraManager so
+        // the visible image and AI frames can never diverge on iOS 16.
+        applyLandscapeOrientation()
+    }
 
-        if #available(iOS 17.0, *) {
-            if connection.isVideoRotationAngleSupported(0) {
-                connection.videoRotationAngle = 0
-            }
-        } else if connection.isVideoOrientationSupported {
-            // iPhone mounted landscape with the notch on the left.
-            connection.videoOrientation = .landscapeRight
-        }
+    func applyLandscapeOrientation() {
+        guard let connection = videoPreviewLayer.connection,
+              connection.isVideoOrientationSupported else { return }
+
+        // Ivy's supported/tested runtime is iOS 16. Keep preview and AI output in the
+        // same AVCapture coordinate system instead of applying a separate preview
+        // rotation transform.
+        connection.videoOrientation = .landscapeRight
     }
 }
