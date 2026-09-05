@@ -41,9 +41,10 @@ jobs:
           bash scripts/download-lane-model.sh
       - name: Generate Xcode project
         run: xcodegen generate
-      - name: Inject 70mai preview token
+      - name: Inject runtime API keys
         env:
           SEVENTYMAI_TOKEN: ${{ secrets.SEVENTYMAI_TOKEN || secrets.A500S_TOKEN || secrets.TOKEN_70MAI || secrets['70MAI_TOKEN'] }}
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
         run: |
           set -euo pipefail
           if [ -n "${SEVENTYMAI_TOKEN:-}" ]; then
@@ -51,11 +52,16 @@ jobs:
           else
             echo "70mai token secret is not configured; RTSP fallback remains available."
           fi
-      - name: Verify no Mapbox dependency remains
+          if [ -n "${GOOGLE_MAPS_API_KEY:-}" ]; then
+            /usr/libexec/PlistBuddy -c "Set :GoogleMapsAPIKey $GOOGLE_MAPS_API_KEY" xADAS-iOS/Info.plist
+          else
+            echo "GOOGLE_MAPS_API_KEY is not configured; Ivy will build but Google Navigation stays disabled."
+          fi
+      - name: Verify navigation configuration
         run: |
           set -euo pipefail
-          ! grep -R "api.mapbox.com\|MapboxAccessToken\|__MAPBOX_TOKEN__" xADAS-iOS project.yml
           grep -R "openstreetmap.de\|openstreetmap.org" xADAS-iOS/ADAS xADAS-iOS/Views
+          grep -q "ios-navigation-sdk" project.yml
       - name: Verify deployment target before build
         run: |
           set -euo pipefail
@@ -77,7 +83,6 @@ jobs:
           test -f "$APP_PATH/UFLDv2TuSimpleRes18Int8.onnx"
           test "$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$INFO")" = "16.0"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$INFO")" = "Ivy"
-          ! /usr/libexec/PlistBuddy -c 'Print :MapboxAccessToken' "$INFO" >/dev/null 2>&1
           xcrun vtool -show-build "$BIN"
       - name: Package unsigned Ivy IPA
         run: |
