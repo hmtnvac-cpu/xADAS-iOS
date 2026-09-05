@@ -63,20 +63,8 @@ targets:
     platform: iOS
     sources:
       - path: IvyShareExtension
-    info:
-      path: IvyShareExtension/Info.plist
-      properties:
-        CFBundleDisplayName: "Ivy"
-        CFBundleName: "Ivy Share"
-        CFBundleShortVersionString: "$(MARKETING_VERSION)"
-        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
-        NSExtension:
-          NSExtensionPointIdentifier: com.apple.share-services
-          NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).ShareViewController"
-          NSExtensionAttributes:
-            NSExtensionActivationRule:
-              NSExtensionActivationSupportsWebURLWithMaxCount: 1
-              NSExtensionActivationSupportsText: true
+        excludes:
+          - Info.plist
     settings:
       base:
         PRODUCT_NAME: IvyShareExtension
