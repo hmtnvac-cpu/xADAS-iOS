@@ -101,6 +101,9 @@ struct DriveView: View {
         }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showNavigationSearch) { NavigationSearchView(provider: navigationProvider) }
+        .onOpenURL { url in
+            navigationProvider.importExternalShare(url: url)
+        }
         .onAppear {
             visionSuspended = false
             vehicleSpeedMonitor.start()
