@@ -41,7 +41,11 @@ jobs:
           python3 -m pip install --disable-pip-version-check onnx==1.17.0 onnxruntime==1.20.1
           bash scripts/download-lane-model.sh
       - name: Generate Xcode project
-        run: xcodegen generate
+        run: |
+          set -euo pipefail
+          xcodegen generate
+          /usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' IvyShareExtension/Info.plist
+          /usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionAttributes:NSExtensionActivationRule' IvyShareExtension/Info.plist
       - name: Inject runtime API keys
         env:
           SEVENTYMAI_TOKEN: ${{ secrets.SEVENTYMAI_TOKEN || secrets.A500S_TOKEN || secrets.TOKEN_70MAI || secrets['70MAI_TOKEN'] }}
@@ -102,7 +106,8 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' "$INFO" >/dev/null
           /usr/libexec/PlistBuddy -c 'Print :NSSpeechRecognitionUsageDescription' "$INFO" >/dev/null
           test "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$SHARE_INFO")" = "com.apple.share-services"
-          /usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionActivationRule' "$SHARE_INFO" >/dev/null
+          RULE=$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionAttributes:NSExtensionActivationRule' "$SHARE_INFO")
+          test "$RULE" = "TRUEPREDICATE"
           KEY=$(/usr/libexec/PlistBuddy -c 'Print :GraphHopperAPIKey' "$INFO")
           test -n "$KEY" && test "$KEY" != "__GRAPHHOPPER_API_KEY__"
           codesign --verify --strict "$SHARE"
