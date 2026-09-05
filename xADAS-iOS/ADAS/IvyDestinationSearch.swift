@@ -45,9 +45,7 @@ final class IvyDestinationSearch: NSObject, ObservableObject, MKLocalSearchCompl
         }
     }
 
-    func completer(_ completer: MKLocalSearchCompleter, didFailWithError error: Error) {
-        suggestions = []
-    }
+    func completer(_ completer: MKLocalSearchCompleter, didFailWithError error: Error) { suggestions = [] }
 
     func resolve(_ suggestion: IvyAddressSuggestion, completion: @escaping (IvySearchResult?) -> Void) {
         let request = MKLocalSearch.Request(completion: suggestion.completion)
@@ -91,49 +89,55 @@ final class IvyDestinationSearch: NSObject, ObservableObject, MKLocalSearchCompl
         do {
             try session.setCategory(.playAndRecord, mode: .measurement, options: [.mixWithOthers, .allowBluetooth])
             try session.setActive(true)
-
             let request = SFSpeechAudioBufferRecognitionRequest()
             request.shouldReportPartialResults = true
             speechRequest = request
-
             let input = audioEngine.inputNode
             let format = input.outputFormat(forBus: 0)
-            guard format.sampleRate > 0, format.channelCount > 0 else {
-                speechError = "Micro chưa sẵn sàng"
-                stopVoice()
-                return
-            }
-            input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
-                request.append(buffer)
-            }
+            guard format.sampleRate > 0, format.channelCount > 0 else { speechError = "Micro chưa sẵn sàng"; stopVoice(); return }
+            input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in request.append(buffer) }
             tapInstalled = true
             audioEngine.prepare()
             try audioEngine.start()
             isListening = true
-
             speechTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
                 DispatchQueue.main.async {
-                    if let text = result?.bestTranscription.formattedString, !text.isEmpty { onText(text) }
+                    if let raw = result?.bestTranscription.formattedString, !raw.isEmpty {
+                        onText(Self.normalizeSpokenAddress(raw))
+                    }
                     if result?.isFinal == true || error != nil { self?.stopVoice() }
                 }
             }
-        } catch {
-            speechError = "Không thể bật micro"
-            stopVoice()
+        } catch { speechError = "Không thể bật micro"; stopVoice() }
+    }
+
+    /// Converts a leading Vietnamese spoken house number to digits so MapKit can
+    /// autocomplete addresses. Example: "một trăm năm mươi bảy Trần Hưng Đạo"
+    /// becomes "157 Trần Hưng Đạo".
+    private static func normalizeSpokenAddress(_ text: String) -> String {
+        let words = text.split(separator: " ").map(String.init)
+        guard !words.isEmpty, !words[0].contains(where: { $0.isNumber }) else { return text }
+        let digit: [String: Int] = ["không":0,"một":1,"mốt":1,"hai":2,"ba":3,"bốn":4,"tư":4,"năm":5,"lăm":5,"sáu":6,"bảy":7,"tám":8,"chín":9]
+        var total = 0, current = 0, consumed = 0, sawNumber = false
+        for raw in words {
+            let w = raw.lowercased()
+            if let n = digit[w] { current += n; consumed += 1; sawNumber = true; continue }
+            if w == "mươi" { current = max(current, 1) * 10; consumed += 1; sawNumber = true; continue }
+            if w == "trăm" { current = max(current, 1) * 100; consumed += 1; sawNumber = true; continue }
+            if w == "nghìn" || w == "ngàn" { total += max(current, 1) * 1000; current = 0; consumed += 1; sawNumber = true; continue }
+            if w == "linh" || w == "lẻ" { consumed += 1; continue }
+            break
         }
+        guard sawNumber, consumed > 0 else { return text }
+        let number = total + current
+        guard number > 0 else { return text }
+        return ([String(number)] + Array(words.dropFirst(consumed))).joined(separator: " ")
     }
 
     func stopVoice() {
         if audioEngine.isRunning { audioEngine.stop() }
-        if tapInstalled {
-            audioEngine.inputNode.removeTap(onBus: 0)
-            tapInstalled = false
-        }
-        speechRequest?.endAudio()
-        speechTask?.cancel()
-        speechRequest = nil
-        speechTask = nil
-        isListening = false
+        if tapInstalled { audioEngine.inputNode.removeTap(onBus: 0); tapInstalled = false }
+        speechRequest?.endAudio(); speechTask?.cancel(); speechRequest = nil; speechTask = nil; isListening = false
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }
 }
