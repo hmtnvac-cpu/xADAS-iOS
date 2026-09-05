@@ -3,24 +3,35 @@ import SwiftUI
 struct NavigationSearchView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var provider: MapNavigationProvider
+    @StateObject private var destinationSearch = IvyDestinationSearch()
     @State private var query = ""
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 10) {
-                HStack(spacing: 10) {
+            VStack(spacing: 8) {
+                HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField("Nhập tên địa điểm hoặc địa chỉ", text: $query)
-                        .textInputAutocapitalization(.never)
+                    TextField("Số nhà, tên đường hoặc địa điểm", text: $query)
+                        .textInputAutocapitalization(.words)
                         .autocorrectionDisabled()
                         .submitLabel(.search)
-                        .onSubmit { runSearch() }
-                    Button("Tìm") { runSearch() }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(query.trimmingCharacters(in: .whitespacesAndNewlines).count < 2)
+                        .onChange(of: query) { text in destinationSearch.update(query: text, near: provider.currentLocation) }
+                        .onSubmit { fallbackSearch() }
+                    Button {
+                        destinationSearch.toggleVoice { text in
+                            query = text
+                            destinationSearch.update(query: text, near: provider.currentLocation)
+                        }
+                    } label: {
+                        Image(systemName: destinationSearch.isListening ? "waveform.circle.fill" : "mic.circle.fill")
+                            .font(.system(size: 27))
+                            .foregroundStyle(destinationSearch.isListening ? .red : .blue)
+                    }
+                    .accessibilityLabel("Tìm điểm đến bằng giọng nói")
                     if !query.isEmpty {
                         Button {
                             query = ""
+                            destinationSearch.update(query: "", near: provider.currentLocation)
                             provider.search(query: "")
                         } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
                     }
@@ -28,43 +39,62 @@ struct NavigationSearchView: View {
                 .padding(.horizontal, 12).padding(.vertical, 10)
                 .background(.secondary.opacity(0.10), in: RoundedRectangle(cornerRadius: 12)).padding(.horizontal)
 
-                if provider.searchResults.isEmpty {
-                    VStack(spacing: 14) {
-                        Image(systemName: "map.fill").font(.system(size: 32, weight: .semibold)).foregroundStyle(.secondary)
-                        Text(provider.status.contains("SEARCHING") ? "Đang tìm…" : "Tìm điểm đến bằng OpenStreetMap").font(.headline)
-                        Text(statusText).font(.subheadline).foregroundStyle(provider.status.contains("ERROR") ? .red : .secondary).multilineTextAlignment(.center).padding(.horizontal, 24)
-                        Text("© OpenStreetMap contributors").font(.caption2).foregroundStyle(.tertiary)
-                    }.frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
+                if destinationSearch.isListening {
+                    Label("Đang nghe… hãy nói địa chỉ", systemImage: "mic.fill").font(.caption).foregroundStyle(.red)
+                } else if let error = destinationSearch.speechError {
+                    Text(error).font(.caption).foregroundStyle(.red)
+                }
+
+                if !destinationSearch.suggestions.isEmpty {
+                    List(destinationSearch.suggestions) { suggestion in
+                        Button {
+                            destinationSearch.resolve(suggestion) { result in
+                                guard let result else { return }
+                                DispatchQueue.main.async {
+                                    provider.startNavigation(to: result)
+                                    dismiss()
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "mappin.and.ellipse")
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(suggestion.title).font(.headline).foregroundStyle(.primary)
+                                    if !suggestion.subtitle.isEmpty { Text(suggestion.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+                                }
+                                Spacer()
+                            }.padding(.vertical, 3)
+                        }
+                    }.listStyle(.plain)
+                } else if !provider.searchResults.isEmpty {
                     List(provider.searchResults) { result in
                         Button {
                             provider.startNavigation(to: result)
                             dismiss()
                         } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: "mappin.circle.fill").font(.title3)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(result.name).font(.headline).foregroundStyle(.primary)
-                                    Text(result.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                                }
-                                Spacer()
-                                Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(.tertiary)
-                            }.padding(.vertical, 4)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(result.name).font(.headline).foregroundStyle(.primary)
+                                Text(result.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                            }
                         }
                     }.listStyle(.plain)
+                } else {
+                    VStack(spacing: 12) {
+                        Image(systemName: "map.fill").font(.system(size: 30)).foregroundStyle(.secondary)
+                        Text("Gõ số nhà + tên đường").font(.headline)
+                        Text("Ivy sẽ gợi ý ngay khi bạn gõ. Hoặc bấm micro và nói, ví dụ “157 Trần Hưng Đạo”.")
+                            .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.horizontal, 28)
+                        Button("Tìm bằng OSM nếu chưa thấy") { fallbackSearch() }
+                            .buttonStyle(.bordered)
+                            .disabled(query.trimmingCharacters(in: .whitespacesAndNewlines).count < 2)
+                    }.frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
             .navigationTitle("Chọn điểm đến")
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Đóng") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Đóng") { destinationSearch.stopVoice(); dismiss() } } }
+            .onDisappear { destinationSearch.stopVoice() }
         }
     }
 
-    private func runSearch() { provider.search(query: query) }
-
-    private var statusText: String {
-        if provider.status.contains("SEARCH ERROR") { return "Không thể tải kết quả. Kiểm tra mạng rồi thử lại." }
-        if provider.status.contains("NO RESULT") { return "Không tìm thấy địa điểm phù hợp. Hãy thử tên hoặc địa chỉ khác." }
-        if provider.status.contains("SEARCHING") { return "Đang truy vấn dữ liệu địa điểm OSM…" }
-        return "Nhập địa điểm rồi bấm Tìm. Ví dụ: “Bệnh viện Đà Nẵng”, “Huế”, “Đà Nẵng Airport”."
-    }
+    private func fallbackSearch() { provider.search(query: query) }
 }
