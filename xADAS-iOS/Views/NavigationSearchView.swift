@@ -15,12 +15,12 @@ struct NavigationSearchView: View {
                         .textInputAutocapitalization(.words)
                         .autocorrectionDisabled()
                         .submitLabel(.search)
-                        .onChange(of: query) { text in destinationSearch.update(query: text, near: provider.currentLocation) }
+                        .onChange(of: query) { text in destinationSearch.update(query: text, near: nil) }
                         .onSubmit { fallbackSearch() }
                     Button {
                         destinationSearch.toggleVoice { text in
                             query = text
-                            destinationSearch.update(query: text, near: provider.currentLocation)
+                            destinationSearch.update(query: text, near: nil)
                         }
                     } label: {
                         Image(systemName: destinationSearch.isListening ? "waveform.circle.fill" : "mic.circle.fill")
@@ -31,7 +31,7 @@ struct NavigationSearchView: View {
                     if !query.isEmpty {
                         Button {
                             query = ""
-                            destinationSearch.update(query: "", near: provider.currentLocation)
+                            destinationSearch.update(query: "", near: nil)
                             provider.search(query: "")
                         } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
                     }
