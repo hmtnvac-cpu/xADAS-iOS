@@ -7,10 +7,17 @@
     <key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
     <key>SeventyMaiToken</key><string>__SEVENTYMAI_TOKEN__</string>
-    <key>GoogleMapsAPIKey</key><string>__GOOGLE_MAPS_API_KEY__</string>
+    <key>GraphHopperAPIKey</key><string>__GRAPHHOPPER_API_KEY__</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key><string>com.hmtnvac.xadas.share</string>
+            <key>CFBundleURLSchemes</key><array><string>ivy</string></array>
+        </dict>
+    </array>
     <key>NSCameraUsageDescription</key><string>Ivy uses the rear camera for real-time driver-assistance vision processing.</string>
     <key>NSLocalNetworkUsageDescription</key><string>Ivy connects directly to your 70mai dashcam on its local Wi-Fi network to receive the RTSP video stream.</string>
-    <key>NSLocationWhenInUseUsageDescription</key><string>Ivy uses GPS for vehicle speed, Google navigation, road matching, speed-limit data, and driver-assistance logic.</string>
+    <key>NSLocationWhenInUseUsageDescription</key><string>Ivy uses GPS for vehicle speed, route guidance, road matching, speed-limit data, and driver-assistance logic.</string>
     <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
     <key>UIRequiresFullScreen</key><true/>
 </dict>
