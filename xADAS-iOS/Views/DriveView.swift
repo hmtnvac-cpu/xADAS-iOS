@@ -19,6 +19,7 @@ struct DriveView: View {
     @StateObject private var vehicleSpeedMonitor = VehicleSpeedMonitor()
     @StateObject private var mapSpeedLimitProvider = MapSpeedLimitProvider()
     @StateObject private var navigationProvider = MapNavigationProvider()
+    @StateObject private var navigationVoiceGuide = NavigationVoiceGuide()
 
     private let seventyMaiURL = CameraSource.seventyMaiURL
     private var selectedSource: CameraSourceChoice { CameraSourceChoice(rawValue: cameraSourceRaw) ?? .seventyMai }
@@ -28,15 +29,10 @@ struct DriveView: View {
     var body: some View {
         ZStack {
             Group {
-                if visionSuspended {
-                    Color.black
-                } else if selectedSource == .iPhone {
-                    CameraPreview(session: cameraManager.session)
-                } else if useVLCFallback {
-                    SeventyMaiPlayerView(urlString: seventyMaiURL, restartToken: restartToken, frameProcessor: frameProcessor, statusText: $rtspStatus)
-                } else {
-                    RootlessSeventyMaiPlayerView(urlString: seventyMaiURL, restartToken: restartToken, frameProcessor: frameProcessor, statusText: $rtspStatus)
-                }
+                if visionSuspended { Color.black }
+                else if selectedSource == .iPhone { CameraPreview(session: cameraManager.session) }
+                else if useVLCFallback { SeventyMaiPlayerView(urlString: seventyMaiURL, restartToken: restartToken, frameProcessor: frameProcessor, statusText: $rtspStatus) }
+                else { RootlessSeventyMaiPlayerView(urlString: seventyMaiURL, restartToken: restartToken, frameProcessor: frameProcessor, statusText: $rtspStatus) }
             }.ignoresSafeArea()
 
             if !visionSuspended {
@@ -68,99 +64,60 @@ struct DriveView: View {
             if showCalibration { CameraAlignmentOverlay(isPresented: $showCalibration) }
 
             VStack {
-                HStack(spacing: 10) {
-                    Spacer()
-                    navigationButton
-                    speakerMenu
-                }
-                .padding(.top, 58)
-                .padding(.trailing, 18)
+                HStack(spacing: 10) { Spacer(); navigationButton; speakerMenu }
+                    .padding(.top, 58).padding(.trailing, 18)
                 Spacer()
                 if !visionSuspended, selectedSource == .seventyMai, (frameProcessor.frameWidth == 0 || frameProcessor.frameHeight == 0) {
                     Button("RETRY 70MAI") {
-                        rtspStatus = "70MAI RETRYING"
-                        useVLCFallback = false
-                        restartToken = UUID()
-                        scheduleNativeFallbackCheck(for: restartToken)
-                    }
-                    .buttonStyle(ADASButtonStyle())
-                    .padding(.bottom, 70)
+                        rtspStatus = "70MAI RETRYING"; useVLCFallback = false; restartToken = UUID(); scheduleNativeFallbackCheck(for: restartToken)
+                    }.buttonStyle(ADASButtonStyle()).padding(.bottom, 70)
                 }
-            }
-            .foregroundStyle(.white)
+            }.foregroundStyle(.white)
         }
         .overlay(alignment: .bottom) {
             if !showCalibration && !visionSuspended {
-                HStack(spacing: 16) {
-                    Button("CALIBRATE") { showCalibration = true }
-                    Button("SETTING") { showSettings = true }
-                }
-                .buttonStyle(ADASButtonStyle())
-                .padding(.bottom, 22)
+                HStack(spacing: 16) { Button("CALIBRATE") { showCalibration = true }; Button("SETTING") { showSettings = true } }
+                    .buttonStyle(ADASButtonStyle()).padding(.bottom, 22)
             }
         }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showNavigationSearch) { NavigationSearchView(provider: navigationProvider) }
-        .onOpenURL { url in
-            navigationProvider.importExternalShare(url: url)
-        }
+        .onOpenURL { navigationProvider.importExternalShare(url: $0) }
         .onAppear {
-            visionSuspended = false
-            vehicleSpeedMonitor.start()
+            visionSuspended = false; vehicleSpeedMonitor.start()
             frameProcessor.vehicleSpeedKPH = vehicleSpeedMonitor.speedKPH
             cameraManager.frameProcessor.vehicleSpeedKPH = vehicleSpeedMonitor.speedKPH
-            if !didInitialConfigure {
-                didInitialConfigure = true
-                configureSelectedSource(force: true)
-            }
+            if !didInitialConfigure { didInitialConfigure = true; configureSelectedSource(force: true) }
             updateWarnings(distance: activeProcessor.leadDistanceState, lane: activeProcessor.laneDepartureState)
         }
+        .onChange(of: navigationProvider.summary) { summary in navigationVoiceGuide.update(summary) }
         .onChange(of: cameraSourceRaw) { _ in configureSelectedSource(force: true) }
         .onChange(of: vehicleSpeedMonitor.latestLocation) { location in
             guard !visionSuspended, let location else { return }
-            mapSpeedLimitProvider.ingest(location: location)
-            navigationProvider.ingest(location: location)
+            mapSpeedLimitProvider.ingest(location: location); navigationProvider.ingest(location: location)
         }
         .onChange(of: scenePhase) { phase in
             switch phase {
             case .active:
-                visionSuspended = false
-                vehicleSpeedMonitor.start()
-                if configuredSourceRaw != cameraSourceRaw {
-                    configureSelectedSource(force: true)
-                } else if selectedSource == .iPhone && !cameraManager.isRunning {
-                    cameraManager.start()
-                } else if selectedSource == .seventyMai {
-                    rtspStatus = "70MAI RESUMING"
-                    restartToken = UUID()
-                    scheduleNativeFallbackCheck(for: restartToken)
-                }
+                visionSuspended = false; vehicleSpeedMonitor.start()
+                if configuredSourceRaw != cameraSourceRaw { configureSelectedSource(force: true) }
+                else if selectedSource == .iPhone && !cameraManager.isRunning { cameraManager.start() }
+                else if selectedSource == .seventyMai { rtspStatus = "70MAI RESUMING"; restartToken = UUID(); scheduleNativeFallbackCheck(for: restartToken) }
             case .background:
-                visionSuspended = true
-                vehicleSpeedMonitor.stop()
-                cameraManager.stop()
-                useVLCFallback = false
-                rtspStatus = "IVY SUSPENDED"
-                restartToken = UUID()
-            case .inactive:
-                break
-            @unknown default:
-                break
+                visionSuspended = true; vehicleSpeedMonitor.stop(); cameraManager.stop(); useVLCFallback = false; rtspStatus = "IVY SUSPENDED"; restartToken = UUID()
+            case .inactive: break
+            @unknown default: break
             }
         }
         .onChange(of: activeProcessor.leadDistanceState) { value in
-            guard !visionSuspended else { return }
-            updateWarnings(distance: value, lane: activeProcessor.laneDepartureState)
+            guard !visionSuspended else { return }; updateWarnings(distance: value, lane: activeProcessor.laneDepartureState)
         }
         .onChange(of: activeProcessor.laneDepartureState) { value in
-            guard !visionSuspended else { return }
-            updateWarnings(distance: activeProcessor.leadDistanceState, lane: value)
+            guard !visionSuspended else { return }; updateWarnings(distance: activeProcessor.leadDistanceState, lane: value)
         }
         .onChange(of: vehicleSpeedMonitor.speedKPH) { speed in
-            frameProcessor.vehicleSpeedKPH = speed
-            cameraManager.frameProcessor.vehicleSpeedKPH = speed
-            guard !visionSuspended else { return }
-            updateWarnings(distance: activeProcessor.leadDistanceState, lane: activeProcessor.laneDepartureState)
+            frameProcessor.vehicleSpeedKPH = speed; cameraManager.frameProcessor.vehicleSpeedKPH = speed
+            guard !visionSuspended else { return }; updateWarnings(distance: activeProcessor.leadDistanceState, lane: activeProcessor.laneDepartureState)
         }
         .persistentSystemOverlays(.hidden)
     }
@@ -170,88 +127,51 @@ struct DriveView: View {
             if navigationProvider.isNavigating {
                 Button("Điểm đến mới", systemImage: "magnifyingglass") { showNavigationSearch = true }
                 Button("Dừng dẫn đường", systemImage: "xmark.circle") { navigationProvider.stopNavigation() }
-            } else {
-                Button("Chọn điểm đến", systemImage: "location.magnifyingglass") { showNavigationSearch = true }
-            }
+            } else { Button("Chọn điểm đến", systemImage: "location.magnifyingglass") { showNavigationSearch = true } }
         } label: {
-            Image(systemName: navigationProvider.isNavigating ? "location.fill" : "location")
-                .font(.system(size: 19, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 42, height: 42)
-                .background(.black.opacity(0.58), in: Circle())
-                .overlay(Circle().stroke(.white.opacity(0.55), lineWidth: 1))
+            Image(systemName: navigationProvider.isNavigating ? "location.fill" : "location").font(.system(size: 19, weight: .bold)).foregroundStyle(.white)
+                .frame(width: 42, height: 42).background(.black.opacity(0.58), in: Circle()).overlay(Circle().stroke(.white.opacity(0.55), lineWidth: 1))
         }
     }
 
     private var speakerMenu: some View {
         Menu {
-            Button { audioModeRaw = ADASAudioMode.beepOnly.rawValue } label: {
-                audioMode == .beepOnly ? Label("Chỉ tiếng bip", systemImage: "checkmark") : Label("Chỉ tiếng bip", systemImage: "speaker.wave.1")
-            }
-            Button { audioModeRaw = ADASAudioMode.allWarnings.rawValue } label: {
-                audioMode == .allWarnings ? Label("Tất cả cảnh báo", systemImage: "checkmark") : Label("Tất cả cảnh báo", systemImage: "speaker.wave.3")
-            }
+            Button { audioModeRaw = ADASAudioMode.beepOnly.rawValue } label: { audioMode == .beepOnly ? Label("Chỉ tiếng bip", systemImage: "checkmark") : Label("Chỉ tiếng bip", systemImage: "speaker.wave.1") }
+            Button { audioModeRaw = ADASAudioMode.allWarnings.rawValue } label: { audioMode == .allWarnings ? Label("Tất cả cảnh báo", systemImage: "checkmark") : Label("Tất cả cảnh báo", systemImage: "speaker.wave.3") }
         } label: {
-            Image(systemName: audioMode == .beepOnly ? "speaker.wave.1.fill" : "speaker.wave.3.fill")
-                .font(.system(size: 19, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 42, height: 42)
-                .background(.black.opacity(0.58), in: Circle())
-                .overlay(Circle().stroke(.white.opacity(0.55), lineWidth: 1))
+            Image(systemName: audioMode == .beepOnly ? "speaker.wave.1.fill" : "speaker.wave.3.fill").font(.system(size: 19, weight: .bold)).foregroundStyle(.white)
+                .frame(width: 42, height: 42).background(.black.opacity(0.58), in: Circle()).overlay(Circle().stroke(.white.opacity(0.55), lineWidth: 1))
         }
     }
 
     private func updateWarnings(distance: LeadDistanceState, lane: LaneDepartureState) {
-        warningManager.update(
-            distance: distance,
-            lane: lane,
-            trafficSign: TrafficSignState(),
-            vehicleSpeedKPH: vehicleSpeedMonitor.speedKPH
-        )
+        warningManager.update(distance: distance, lane: lane, trafficSign: TrafficSignState(), vehicleSpeedKPH: vehicleSpeedMonitor.speedKPH)
     }
 
     private func configureSelectedSource(force: Bool = false) {
-        guard force || configuredSourceRaw != cameraSourceRaw else { return }
-        configuredSourceRaw = cameraSourceRaw
+        guard force || configuredSourceRaw != cameraSourceRaw else { return }; configuredSourceRaw = cameraSourceRaw
         switch selectedSource {
         case .seventyMai:
-            cameraManager.stop()
-            frameProcessor.horizontalFieldOfViewDegrees = 140
+            cameraManager.stop(); frameProcessor.horizontalFieldOfViewDegrees = 140
             frameProcessor.effectiveFocalPixelsAt1920 = max(UserDefaults.standard.double(forKey: DistanceEstimator.seventyMaiFocalPixelsKey), 100)
-            useVLCFallback = false
-            restartToken = UUID()
-            rtspStatus = "70MAI STARTING"
-            scheduleNativeFallbackCheck(for: restartToken)
+            useVLCFallback = false; restartToken = UUID(); rtspStatus = "70MAI STARTING"; scheduleNativeFallbackCheck(for: restartToken)
         case .iPhone:
-            frameProcessor.effectiveFocalPixelsAt1920 = nil
-            useVLCFallback = false
-            rtspStatus = "IPHONE CAMERA ACTIVE"
-            cameraManager.start()
+            frameProcessor.effectiveFocalPixelsAt1920 = nil; useVLCFallback = false; rtspStatus = "IPHONE CAMERA ACTIVE"; cameraManager.start()
         }
     }
 
     private func scheduleNativeFallbackCheck(for token: UUID) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
-            guard !visionSuspended,
-                  selectedSource == .seventyMai,
-                  restartToken == token,
-                  !useVLCFallback,
+            guard !visionSuspended, selectedSource == .seventyMai, restartToken == token, !useVLCFallback,
                   frameProcessor.frameWidth == 0 || frameProcessor.frameHeight == 0 else { return }
-            rtspStatus = "70MAI VLC FALLBACK"
-            useVLCFallback = true
+            rtspStatus = "70MAI VLC FALLBACK"; useVLCFallback = true
         }
     }
 }
 
 private struct ADASButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.caption.bold())
-            .foregroundStyle(.white)
-            .padding(.horizontal, 18)
-            .padding(.vertical, 11)
-            .background(.black.opacity(configuration.isPressed ? 0.75 : 0.5))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(.white.opacity(0.5), lineWidth: 1))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+        configuration.label.font(.caption.bold()).foregroundStyle(.white).padding(.horizontal, 18).padding(.vertical, 11)
+            .background(.black.opacity(configuration.isPressed ? 0.75 : 0.5)).overlay(RoundedRectangle(cornerRadius: 10).stroke(.white.opacity(0.5), lineWidth: 1)).clipShape(RoundedRectangle(cornerRadius: 10))
     }
 }
