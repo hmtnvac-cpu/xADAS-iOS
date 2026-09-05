@@ -10,9 +10,6 @@ packages:
   ONNXRuntime:
     url: https://github.com/microsoft/onnxruntime-swift-package-manager.git
     exactVersion: 1.20.0
-  GoogleNavigation:
-    url: https://github.com/googlemaps/ios-navigation-sdk.git
-    from: 10.0.0
 settings:
   base:
     SWIFT_VERSION: 5.0
@@ -27,8 +24,7 @@ targets:
         product: VLCKit
       - package: ONNXRuntime
         product: onnxruntime
-      - package: GoogleNavigation
-        product: GoogleNavigation
+      - target: IvyShareExtension
     info:
       path: xADAS-iOS/Info.plist
       properties:
@@ -37,10 +33,14 @@ targets:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         SeventyMaiToken: "__SEVENTYMAI_TOKEN__"
-        GoogleMapsAPIKey: "__GOOGLE_MAPS_API_KEY__"
+        GraphHopperAPIKey: "__GRAPHHOPPER_API_KEY__"
         NSCameraUsageDescription: "Ivy uses the camera for real-time driver-assistance vision processing."
         NSLocalNetworkUsageDescription: "Ivy connects directly to your 70mai dashcam on its local Wi-Fi network to receive the RTSP video stream."
-        NSLocationWhenInUseUsageDescription: "Ivy uses GPS for vehicle speed, Google navigation, road matching, speed-limit data, and driver-assistance logic."
+        NSLocationWhenInUseUsageDescription: "Ivy uses GPS for vehicle speed, route guidance, road matching, speed-limit data, and driver-assistance logic."
+        CFBundleURLTypes:
+          - CFBundleURLName: com.hmtnvac.xadas.share
+            CFBundleURLSchemes:
+              - ivy
         UIRequiresFullScreen: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationLandscapeLeft
@@ -55,4 +55,21 @@ targets:
         INFOPLIST_FILE: xADAS-iOS/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         SUPPORTS_MACCATALYST: NO
+        CODE_SIGN_STYLE: Automatic
+  IvyShareExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: IvyShareExtension
+    info:
+      path: IvyShareExtension/Info.plist
+    settings:
+      base:
+        PRODUCT_NAME: IvyShareExtension
+        PRODUCT_BUNDLE_IDENTIFIER: com.hmtnvac.xadas.share
+        MARKETING_VERSION: 1.0.0
+        CURRENT_PROJECT_VERSION: 100
+        INFOPLIST_FILE: IvyShareExtension/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        SKIP_INSTALL: YES
         CODE_SIGN_STYLE: Automatic
