@@ -63,6 +63,8 @@ jobs:
           set -euo pipefail
           grep -R "graphhopper.com/api/1/route" xADAS-iOS/ADAS
           grep -R "openstreetmap.de\|openstreetmap.org" xADAS-iOS/ADAS xADAS-iOS/Views
+          grep -q "NSMicrophoneUsageDescription" project.yml
+          grep -q "NSSpeechRecognitionUsageDescription" project.yml
           ! grep -R "ios-navigation-sdk\|GoogleMapsAPIKey\|__GOOGLE_MAPS_API_KEY__" project.yml xADAS-iOS IvyShareExtension
       - name: Verify deployment target before build
         run: |
@@ -74,6 +76,14 @@ jobs:
         run: |
           set -o pipefail
           xcodebuild -project xADAS-iOS.xcodeproj -scheme xADAS-iOS -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath "$RUNNER_TEMP/DerivedData" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build | tee "$RUNNER_TEMP/xcodebuild.log"
+      - name: Ad-hoc sign nested extension and app
+        run: |
+          set -euo pipefail
+          APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/Ivy.app"
+          SHARE="$APP_PATH/PlugIns/IvyShareExtension.appex"
+          codesign --force --sign - --timestamp=none "$SHARE"
+          codesign --force --sign - --timestamp=none "$APP_PATH"
+          codesign --verify --deep --strict "$APP_PATH"
       - name: Preflight built Ivy app bundle
         run: |
           set -euo pipefail
@@ -81,24 +91,30 @@ jobs:
           INFO="$APP_PATH/Info.plist"
           BIN="$APP_PATH/Ivy"
           SHARE="$APP_PATH/PlugIns/IvyShareExtension.appex"
+          SHARE_INFO="$SHARE/Info.plist"
           test -d "$APP_PATH" && test -f "$INFO" && test -f "$BIN"
           test -d "$APP_PATH/YOLOv3TinyInt8LUT.mlmodelc"
           test -f "$APP_PATH/UFLDv2TuSimpleRes18Int8.onnx"
-          test -d "$SHARE"
+          test -d "$SHARE" && test -f "$SHARE_INFO"
           test "$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$INFO")" = "16.0"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$INFO")" = "Ivy"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0' "$INFO")" = "ivy"
+          /usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' "$INFO" >/dev/null
+          /usr/libexec/PlistBuddy -c 'Print :NSSpeechRecognitionUsageDescription' "$INFO" >/dev/null
+          test "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$SHARE_INFO")" = "com.apple.share-services"
+          /usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionActivationRule' "$SHARE_INFO" >/dev/null
           KEY=$(/usr/libexec/PlistBuddy -c 'Print :GraphHopperAPIKey' "$INFO")
           test -n "$KEY" && test "$KEY" != "__GRAPHHOPPER_API_KEY__"
+          codesign --verify --strict "$SHARE"
           xcrun vtool -show-build "$BIN"
-      - name: Package unsigned Ivy IPA
+      - name: Package Ivy IPA
         run: |
           set -euo pipefail
           APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/Ivy.app"
           INFO="$APP_PATH/Info.plist"
           VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO")
           BUILD=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO")
-          NAME="Ivy-V${VERSION}-B${BUILD}-unsigned"
+          NAME="Ivy-V${VERSION}-B${BUILD}-adhoc"
           rm -rf "$RUNNER_TEMP/Payload" && mkdir -p "$RUNNER_TEMP/Payload"
           cp -R "$APP_PATH" "$RUNNER_TEMP/Payload/"
           cd "$RUNNER_TEMP" && /usr/bin/zip -qry "$NAME.ipa" Payload
