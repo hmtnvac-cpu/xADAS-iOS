@@ -12,11 +12,7 @@
         <key>NSExtensionPrincipalClass</key><string>$(PRODUCT_MODULE_NAME).ShareViewController</string>
         <key>NSExtensionAttributes</key>
         <dict>
-            <key>NSExtensionActivationRule</key>
-            <dict>
-                <key>NSExtensionActivationSupportsWebURLWithMaxCount</key><integer>1</integer>
-                <key>NSExtensionActivationSupportsText</key><true/>
-            </dict>
+            <key>NSExtensionActivationRule</key><string>TRUEPREDICATE</string>
         </dict>
     </dict>
 </dict>
